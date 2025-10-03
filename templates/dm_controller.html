@@ -368,8 +368,12 @@
             }
         });
 
+        socket.on('abort_failed_warning', (data) => {
+            addLog(`⚠️ Abort failed: Buttons pressed ${data.time_diff.toFixed(2)}s apart - SHOWING WARNING (8 seconds)`, 'error');
+        });
+
         socket.on('abort_failed_full_reset', (data) => {
-            addLog(`❌ Abort failed: Buttons pressed ${data.time_diff.toFixed(2)}s apart - FULL RESET TO CODE ENTRY`, 'error');
+            addLog(`❌ Abort failed: FULL RESET TO CODE ENTRY`, 'error');
             document.getElementById('receptionAbort').classList.remove('pressed');
             document.getElementById('serverAbort').classList.remove('pressed');
             document.getElementById('receptionAbortStatus').textContent = 'Waiting...';

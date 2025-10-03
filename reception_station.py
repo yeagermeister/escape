@@ -1,13 +1,14 @@
 import sys
 import socketio
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QVBoxLayout
-from PyQt5.QtCore import Qt, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
 from PyQt5.QtGui import QFont
 
 class ReceptionSignals(QObject):
     unlock = pyqtSignal()
     show_abort = pyqtSignal()
     abort_success = pyqtSignal()
+    show_warning = pyqtSignal(float)
     full_reset = pyqtSignal()
 
 class ReceptionStation(QWidget):
@@ -17,6 +18,7 @@ class ReceptionStation(QWidget):
         self.signals.unlock.connect(self.unlock_screen)
         self.signals.show_abort.connect(self.show_abort_button)
         self.signals.abort_success.connect(self.show_success)
+        self.signals.show_warning.connect(self.show_abort_failed_warning)
         self.signals.full_reset.connect(self.reset_to_locked)
         
         self.initUI()
@@ -91,16 +93,21 @@ class ReceptionStation(QWidget):
         def on_aborted(data):
             self.signals.abort_success.emit()
         
+        @self.sio.on('abort_failed_warning')
+        def on_abort_warning(data):
+            time_diff = data.get('time_diff', 0)
+            self.signals.show_warning.emit(time_diff)
+        
+        @self.sio.on('abort_failed_full_reset')
+        def on_abort_failed_full_reset(data):
+            self.signals.full_reset.emit()
+        
         @self.sio.on('game_reset')
         def on_reset(data):
             self.signals.full_reset.emit()
         
         @self.sio.on('timer_stopped')
         def on_stopped(data):
-            self.signals.full_reset.emit()
-        
-        @self.sio.on('abort_failed_full_reset')
-        def on_abort_failed_full_reset(data):
             self.signals.full_reset.emit()
         
         try:
@@ -118,7 +125,7 @@ class ReceptionStation(QWidget):
     def show_abort_button(self):
         self.locked_label.setText('⚠️ SELF-DESTRUCT ACTIVE ⚠️')
         self.locked_label.setStyleSheet("color: #ff0000;")
-        self.message_label.setText('PRESS BUTTON TO ABORT\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
+        self.message_label.setText('PRESS BUTTON TO ABORT\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS')
         self.message_label.setStyleSheet("color: #ffaa00;")
         self.abort_button.show()
     
@@ -126,13 +133,21 @@ class ReceptionStation(QWidget):
         print("Reception abort button pressed!")
         self.sio.emit('abort_button_press', {'location': 'reception'})
         self.abort_button.setEnabled(False)
-        self.message_label.setText('BUTTON PRESSED!\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
+        self.message_label.setText('BUTTON PRESSED!\nWAITING FOR SERVER ROOM...')
     
     def show_success(self):
         self.locked_label.setText('✓ MISSION COMPLETE ✓')
         self.locked_label.setStyleSheet("color: #00ff00;")
         self.message_label.setText('SELF-DESTRUCT SEQUENCE ABORTED!')
         self.message_label.setStyleSheet("color: #00ff00;")
+        self.abort_button.hide()
+    
+    def show_abort_failed_warning(self, time_diff):
+        """Show warning message for 8 seconds before reset"""
+        self.locked_label.setText('❌ ABORT FAILED ❌')
+        self.locked_label.setStyleSheet("color: #ff0000;")
+        self.message_label.setText(f'BUTTONS NOT PRESSED SIMULTANEOUSLY\n\nTime Difference: {time_diff:.2f} seconds\nRequired: Within 10 seconds\n\nRESETTING IN 8 SECONDS...')
+        self.message_label.setStyleSheet("color: #ff0000;")
         self.abort_button.hide()
     
     def reset_to_locked(self):
@@ -154,7 +169,7 @@ class ReceptionStation(QWidget):
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = 'http://localhost:5000'  # Update with DM's IP
+    SERVER_URL = '10.0.0.167:5000'  # Update with DM's IP
     
     app = QApplication(sys.argv)
     station = ReceptionStation(SERVER_URL)

@@ -132,7 +132,7 @@ class TimerDisplay(QWidget):
 if __name__ == '__main__':
     # Change this to your DM Surface Pro's IP address
     # Use 'localhost' if testing on the same machine
-    SERVER_URL = 'http://localhost:5000'  # Update with actual IP for production
+    SERVER_URL = '10.0.0.167:5000'  # Update with actual IP for production
     
     app = QApplication(sys.argv)
     timer = TimerDisplay(SERVER_URL)

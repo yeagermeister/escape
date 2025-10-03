@@ -14,7 +14,7 @@ class ServerSignals(QObject):
     transmission_failed = pyqtSignal(str)
     show_abort = pyqtSignal()
     abort_success = pyqtSignal()
-    abort_reset = pyqtSignal()
+    show_warning = pyqtSignal(float)
     play_audio = pyqtSignal(str)
     game_reset = pyqtSignal()
 
@@ -27,7 +27,7 @@ class ServerRoomStation(QWidget):
         self.signals.transmission_failed.connect(self.show_failure)
         self.signals.show_abort.connect(self.show_abort_button)
         self.signals.abort_success.connect(self.show_success)
-        self.signals.abort_reset.connect(self.reset_abort_button)
+        self.signals.show_warning.connect(self.show_abort_failed_warning)
         self.signals.play_audio.connect(self.play_sound)
         self.signals.game_reset.connect(self.reset_station)
         
@@ -162,16 +162,21 @@ class ServerRoomStation(QWidget):
         def on_aborted(data):
             self.signals.abort_success.emit()
         
+        @self.sio.on('abort_failed_warning')
+        def on_abort_warning(data):
+            time_diff = data.get('time_diff', 0)
+            self.signals.show_warning.emit(time_diff)
+        
+        @self.sio.on('abort_failed_full_reset')
+        def on_abort_failed_full_reset(data):
+            self.signals.game_reset.emit()
+        
         @self.sio.on('game_reset')
         def on_reset(data):
             self.signals.game_reset.emit()
         
         @self.sio.on('timer_stopped')
         def on_stopped(data):
-            self.signals.game_reset.emit()
-        
-        @self.sio.on('abort_failed_full_reset')
-        def on_abort_failed_full_reset(data):
             self.signals.game_reset.emit()
         
         @self.sio.on('play_audio')
@@ -222,7 +227,7 @@ class ServerRoomStation(QWidget):
         self.status_label.setText('')
     
     def show_abort_button(self):
-        self.status_label.setText('PRESS BUTTON TO ABORT\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
+        self.status_label.setText('PRESS BUTTON TO ABORT\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS')
         self.status_label.setStyleSheet("color: #ffaa00;")
         self.abort_button.show()
     
@@ -242,10 +247,15 @@ class ServerRoomStation(QWidget):
         self.abort_button.hide()
         self.stop_sounds.set()
     
-    def reset_abort_button(self):
-        self.abort_button.setEnabled(True)
-        self.status_label.setText('FAILED! TRY AGAIN\n(MUST BE WITHIN 10 SECONDS)')
+    def show_abort_failed_warning(self, time_diff):
+        """Show warning message for 8 seconds before reset"""
+        self.title_label.setText('❌ ABORT PROCEDURE FAILED ❌')
+        self.title_label.setStyleSheet("color: #ff0000;")
+        self.instruction_label.setText('BUTTONS NOT PRESSED SIMULTANEOUSLY')
+        self.instruction_label.setStyleSheet("color: #ff0000;")
+        self.status_label.setText(f'Time Difference: {time_diff:.2f} seconds\nRequired: Within 10 seconds\n\nRESETTING TO CODE ENTRY IN 8 SECONDS...')
         self.status_label.setStyleSheet("color: #ff0000;")
+        self.abort_button.hide()
     
     def reset_station(self):
         """Reset server room station to initial code entry state"""
@@ -304,7 +314,7 @@ class ServerRoomStation(QWidget):
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = 'http://localhost:5000'  # Update with DM's IP for production
+    SERVER_URL = '10.0.0.167:5000'  # Update with DM's IP for production
     
     app = QApplication(sys.argv)
     station = ServerRoomStation(SERVER_URL)
