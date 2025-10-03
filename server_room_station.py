@@ -222,7 +222,7 @@ class ServerRoomStation(QWidget):
         self.status_label.setText('')
     
     def show_abort_button(self):
-        self.status_label.setText('PRESS BUTTON TO ABORT\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS')
+        self.status_label.setText('PRESS BUTTON TO ABORT\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
         self.status_label.setStyleSheet("color: #ffaa00;")
         self.abort_button.show()
     
@@ -248,6 +248,7 @@ class ServerRoomStation(QWidget):
         self.status_label.setStyleSheet("color: #ff0000;")
     
     def reset_station(self):
+        """Reset server room station to initial code entry state"""
         self.title_label.setText('SERVER CONTROL TERMINAL')
         self.title_label.setStyleSheet("color: #00ff00;")
         self.instruction_label.setText('ENTER SHUTDOWN CODE:')

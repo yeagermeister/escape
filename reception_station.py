@@ -118,7 +118,7 @@ class ReceptionStation(QWidget):
     def show_abort_button(self):
         self.locked_label.setText('⚠️ SELF-DESTRUCT ACTIVE ⚠️')
         self.locked_label.setStyleSheet("color: #ff0000;")
-        self.message_label.setText('PRESS BUTTON TO ABORT\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS')
+        self.message_label.setText('PRESS BUTTON TO ABORT\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
         self.message_label.setStyleSheet("color: #ffaa00;")
         self.abort_button.show()
     
@@ -126,7 +126,7 @@ class ReceptionStation(QWidget):
         print("Reception abort button pressed!")
         self.sio.emit('abort_button_press', {'location': 'reception'})
         self.abort_button.setEnabled(False)
-        self.message_label.setText('BUTTON PRESSED!\nWAITING FOR SERVER ROOM...')
+        self.message_label.setText('BUTTON PRESSED!\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
     
     def show_success(self):
         self.locked_label.setText('✓ MISSION COMPLETE ✓')
@@ -136,6 +136,7 @@ class ReceptionStation(QWidget):
         self.abort_button.hide()
     
     def reset_to_locked(self):
+        """Reset reception station to initial locked state"""
         self.locked_label.setText('🔒 SYSTEM LOCKED 🔒')
         self.locked_label.setStyleSheet("color: #ff0000;")
         self.message_label.setText('ACCESS DENIED')
