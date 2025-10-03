@@ -133,6 +133,12 @@ def handle_transmission_code(data):
     
     print(f"Code received: {code}")
     
+    # Send verifying message first
+    emit('transmission_verifying', {'code': code})
+    
+    # Simulate verification delay (2 seconds)
+    eventlet.sleep(2)
+    
     if code == TRANSMISSION_CODE:
         game_state['transmission_shut_down'] = True
         game_state['self_destruct_active'] = True
@@ -151,7 +157,7 @@ def handle_transmission_code(data):
         
     else:
         print("✗ Invalid code")
-        emit('transmission_shutdown', {'success': False, 'message': 'Invalid code'})
+        emit('transmission_shutdown', {'success': False, 'message': 'INVALID CODE - ACCESS DENIED'})
 
 @socketio.on('abort_button_press')
 def handle_abort_button(data):
@@ -191,13 +197,16 @@ def handle_abort_button(data):
             
             print(f"✓ Self-destruct aborted! Time difference: {time_diff:.2f} seconds")
         else:
-            # Too far apart
+            # Too far apart - FULL RESET back to beginning
             game_state['abort_buttons'] = {'reception': None, 'server_room': None}
-            socketio.emit('abort_failed', {
+            game_state['self_destruct_active'] = False
+            game_state['transmission_shut_down'] = False
+            
+            socketio.emit('abort_failed_full_reset', {
                 'reason': 'not_simultaneous',
                 'time_diff': round(time_diff, 2)
             }, namespace='/')
-            print(f"✗ Abort failed - buttons pressed {time_diff:.2f} seconds apart")
+            print(f"✗ Abort failed - buttons pressed {time_diff:.2f} seconds apart - FULL RESET")
     else:
         # First button pressed
         socketio.emit('abort_button_pressed', {

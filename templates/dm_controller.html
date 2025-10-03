@@ -368,12 +368,18 @@
             }
         });
 
-        socket.on('abort_failed', (data) => {
-            addLog(`❌ Abort failed: Buttons pressed ${data.time_diff.toFixed(2)}s apart (must be within 10s)`, 'error');
+        socket.on('abort_failed_full_reset', (data) => {
+            addLog(`❌ Abort failed: Buttons pressed ${data.time_diff.toFixed(2)}s apart - FULL RESET TO CODE ENTRY`, 'error');
             document.getElementById('receptionAbort').classList.remove('pressed');
             document.getElementById('serverAbort').classList.remove('pressed');
             document.getElementById('receptionAbortStatus').textContent = 'Waiting...';
             document.getElementById('serverAbortStatus').textContent = 'Waiting...';
+            
+            // Hide abort panel and update game state display
+            document.getElementById('abortPanel').style.display = 'none';
+            gameState.self_destruct_active = false;
+            gameState.transmission_shut_down = false;
+            updateDisplay();
         });
 
         socket.on('self_destruct_aborted', (data) => {
