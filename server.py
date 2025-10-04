@@ -62,6 +62,9 @@ def handle_start_timer():
     
     print("Timer started!")
     
+    # Play start audio
+    socketio.emit('play_audio', {'clip': 'start'}, namespace='/')
+    
     # Start countdown loop
     socketio.start_background_task(countdown_timer)
     
@@ -80,6 +83,10 @@ def countdown_timer():
     if game_state['time_remaining'] <= 0:
         game_state['timer_running'] = False
         game_state['reception_unlocked'] = True
+        
+        # Play lose audio
+        socketio.emit('play_audio', {'clip': 'lose'}, namespace='/')
+        
         socketio.emit('game_over', {'success': False}, namespace='/')
 
 @socketio.on('pause_timer')
@@ -197,26 +204,16 @@ def handle_abort_button(data):
             
             print(f"✓ Self-destruct aborted! Time difference: {time_diff:.2f} seconds")
         else:
-            # Too far apart - Show warning, then reset
-            socketio.emit('abort_failed_warning', {
+            # Too far apart - FULL RESET back to beginning
+            game_state['abort_buttons'] = {'reception': None, 'server_room': None}
+            game_state['self_destruct_active'] = False
+            game_state['transmission_shut_down'] = False
+            
+            socketio.emit('abort_failed_full_reset', {
                 'reason': 'not_simultaneous',
                 'time_diff': round(time_diff, 2)
             }, namespace='/')
-            print(f"✗ Abort failed - buttons pressed {time_diff:.2f} seconds apart - Showing warning")
-            
-            # Wait 8 seconds then send full reset
-            def delayed_reset():
-                eventlet.sleep(8)
-                game_state['abort_buttons'] = {'reception': None, 'server_room': None}
-                game_state['self_destruct_active'] = False
-                game_state['transmission_shut_down'] = False
-                socketio.emit('abort_failed_full_reset', {
-                    'reason': 'not_simultaneous',
-                    'time_diff': round(time_diff, 2)
-                }, namespace='/')
-                print("Full reset executed after warning period")
-            
-            socketio.start_background_task(delayed_reset)
+            print(f"✗ Abort failed - buttons pressed {time_diff:.2f} seconds apart - FULL RESET")
     else:
         # First button pressed
         socketio.emit('abort_button_pressed', {

@@ -81,7 +81,7 @@ class TimerDisplay(QWidget):
         
         @self.sio.on('game_over')
         def on_game_over(data):
-            self.signals.update_status.emit('TIME UP!')
+            self.signals.update_status.emit('PRESS EXIT BUTTON')
             self.timer_label.setStyleSheet("color: #ff0000; font-weight: bold;")
         
         @self.sio.on('game_reset')
@@ -98,7 +98,7 @@ class TimerDisplay(QWidget):
         
         @self.sio.on('self_destruct_aborted')
         def on_aborted(data):
-            self.signals.update_status.emit('MISSION COMPLETE!')
+            self.signals.update_status.emit('PRESS EXIT BUTTON')
             self.timer_label.setStyleSheet("color: #00ff00; font-weight: bold;")
         
         try:
@@ -136,7 +136,7 @@ class TimerDisplay(QWidget):
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = 'http://10.0.0.167:5000'  # DM Surface Pro IP
+    SERVER_URL = 'http://10.0.0.167:5000'  # DM Mac IP
     
     app = QApplication(sys.argv)
     timer = TimerDisplay(SERVER_URL)

@@ -17,6 +17,7 @@ class ServerSignals(QObject):
     abort_reset = pyqtSignal()
     play_audio = pyqtSignal(str)
     game_reset = pyqtSignal()
+    game_over = pyqtSignal()
 
 class ServerRoomStation(QWidget):
     def __init__(self, server_url):
@@ -30,6 +31,7 @@ class ServerRoomStation(QWidget):
         self.signals.abort_reset.connect(self.reset_abort_button)
         self.signals.play_audio.connect(self.play_sound)
         self.signals.game_reset.connect(self.reset_station)
+        self.signals.game_over.connect(self.show_game_over)
         
         self.init_audio()
         self.initUI()
@@ -178,6 +180,10 @@ class ServerRoomStation(QWidget):
         def on_abort_failed_full_reset(data):
             self.signals.game_reset.emit()
         
+        @self.sio.on('game_over')
+        def on_game_over(data):
+            self.signals.game_over.emit()
+        
         @self.sio.on('play_audio')
         def on_play_audio(data):
             clip = data.get('clip')
@@ -245,8 +251,20 @@ class ServerRoomStation(QWidget):
         self.title_label.setStyleSheet("color: #00ff00;")
         self.instruction_label.setText('SELF-DESTRUCT SEQUENCE ABORTED!')
         self.instruction_label.setStyleSheet("color: #00ff00;")
-        self.status_label.setText('YOU HAVE SAVED THE FACILITY!')
+        self.status_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
         self.status_label.setStyleSheet("color: #00ff00;")
+        self.abort_button.hide()
+        self.stop_sounds.set()
+    
+    def show_game_over(self):
+        self.title_label.setText('⏰ TIME EXPIRED ⏰')
+        self.title_label.setStyleSheet("color: #ff0000;")
+        self.instruction_label.setText('MISSION FAILED')
+        self.instruction_label.setStyleSheet("color: #ff0000;")
+        self.status_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
+        self.status_label.setStyleSheet("color: #ffaa00;")
+        self.code_input.hide()
+        self.submit_button.hide()
         self.abort_button.hide()
         self.stop_sounds.set()
     
@@ -268,6 +286,7 @@ class ServerRoomStation(QWidget):
         self.status_label.setText('')
         self.abort_button.hide()
         self.abort_button.setEnabled(True)
+        self.stop_sounds.clear()
     
     def play_sound(self, clip_name):
         """Play audio clip"""
@@ -311,7 +330,7 @@ class ServerRoomStation(QWidget):
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = 'http://10.0.0.167:5000'  # Update with DM's IP for production
+    SERVER_URL = 'http://10.0.0.167:5000'  # DM Mac IP
     
     app = QApplication(sys.argv)
     station = ServerRoomStation(SERVER_URL)

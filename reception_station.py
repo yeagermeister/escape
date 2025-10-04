@@ -116,10 +116,10 @@ class ReceptionStation(QWidget):
             self.message_label.setText(f'CONNECTION FAILED\n{str(e)}')
     
     def unlock_screen(self):
-        self.locked_label.setText('✓ SYSTEM UNLOCKED ✓')
-        self.locked_label.setStyleSheet("color: #00ff00;")
-        self.message_label.setText('ACCESS GRANTED')
-        self.message_label.setStyleSheet("color: #00ff00;")
+        self.locked_label.setText('⏰ TIME EXPIRED ⏰')
+        self.locked_label.setStyleSheet("color: #ff0000;")
+        self.message_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
+        self.message_label.setStyleSheet("color: #ffaa00;")
         self.abort_button.hide()
     
     def show_abort_button(self):
@@ -138,7 +138,7 @@ class ReceptionStation(QWidget):
     def show_success(self):
         self.locked_label.setText('✓ MISSION COMPLETE ✓')
         self.locked_label.setStyleSheet("color: #00ff00;")
-        self.message_label.setText('SELF-DESTRUCT SEQUENCE ABORTED!')
+        self.message_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
         self.message_label.setStyleSheet("color: #00ff00;")
         self.abort_button.hide()
     
@@ -160,7 +160,7 @@ class ReceptionStation(QWidget):
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = 'http://10.0.0.167:5000'  # DM Surface Pro IP
+    SERVER_URL = 'http://10.0.0.167:5000'  # DM Mac IP
     
     app = QApplication(sys.argv)
     station = ReceptionStation(SERVER_URL)
