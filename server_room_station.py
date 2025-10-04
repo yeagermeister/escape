@@ -286,7 +286,7 @@ class ServerRoomStation(QWidget):
         self.status_label.setText('')
         self.abort_button.hide()
         self.abort_button.setEnabled(True)
-        self.stop_sounds.clear()
+        # Random sounds continue playing - don't touch stop_sounds
     
     def play_sound(self, clip_name):
         """Play audio clip"""
