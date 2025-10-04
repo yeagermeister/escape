@@ -41,8 +41,12 @@ class ServerRoomStation(QWidget):
     def init_audio(self):
         """Initialize pygame mixer for audio"""
         pygame.mixer.init()
-        self.audio_path = 'audio/'  # Create this folder and add audio files
+        self.audio_path = 'audio/'
         self.stop_sounds = Event()
+        
+        # Reserve channel 0 for random background sounds
+        # Music channel will be used for important sounds (start, lose, self-destruct)
+        self.random_sound_channel = pygame.mixer.Channel(0)
     
     def initUI(self):
         self.setWindowTitle('Server Room Terminal')
@@ -289,13 +293,27 @@ class ServerRoomStation(QWidget):
         # Random sounds continue playing - don't touch stop_sounds
     
     def play_sound(self, clip_name):
-        """Play audio clip"""
+        """Play audio clip - important sounds use music channel"""
         try:
             audio_file = os.path.join(self.audio_path, f'{clip_name}.mp3')
             if os.path.exists(audio_file):
-                pygame.mixer.music.load(audio_file)
-                pygame.mixer.music.play()
-                print(f"Playing: {clip_name}")
+                # Important game sounds (start, lose, self-destruct) use music channel
+                if clip_name in ['start', 'lose', 'self_destruct_initiated', 'self_destruct_aborted']:
+                    # Stop any random sounds playing
+                    self.random_sound_channel.stop()
+                    # Play important sound on music channel
+                    pygame.mixer.music.load(audio_file)
+                    pygame.mixer.music.play()
+                    print(f"Playing important sound: {clip_name}")
+                else:
+                    # Random/manual sounds use sound effect channel (won't interrupt music)
+                    # Only play if music channel is not busy
+                    if not pygame.mixer.music.get_busy():
+                        sound = pygame.mixer.Sound(audio_file)
+                        self.random_sound_channel.play(sound)
+                        print(f"Playing background sound: {clip_name}")
+                    else:
+                        print(f"Skipping {clip_name} - important sound is playing")
             else:
                 print(f"Audio file not found: {audio_file}")
         except Exception as e:
@@ -311,9 +329,12 @@ class ServerRoomStation(QWidget):
                 if self.stop_sounds.wait(wait_time):
                     break
                 
-                # Play random creepy sound
-                sound = random.choice(creepy_sounds)
-                self.play_sound(sound)
+                # Only play random sound if no important sound is playing
+                if not pygame.mixer.music.get_busy():
+                    sound = random.choice(creepy_sounds)
+                    self.play_sound(sound)
+                else:
+                    print("Skipping random sound - important audio is playing")
         
         sound_thread = Thread(target=random_sound_loop, daemon=True)
         sound_thread.start()
