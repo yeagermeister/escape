@@ -51,12 +51,16 @@ class TimerDisplay(QWidget):
         self.setLayout(layout)
     
     def setup_socketio(self, server_url):
-        self.sio = socketio.Client()
+        self.sio = socketio.Client(logger=False, engineio_logger=False)
         
-        @self.sio.on('connect')
-        def on_connect():
-            print('Connected to server')
+        @self.sio.event
+        def connect():
+            print('Timer display connected')
             self.signals.update_status.emit('CONNECTED')
+        
+        @self.sio.event
+        def disconnect():
+            print('Timer display disconnected')
         
         @self.sio.on('timer_update')
         def on_timer_update(data):
@@ -98,7 +102,9 @@ class TimerDisplay(QWidget):
             self.timer_label.setStyleSheet("color: #00ff00; font-weight: bold;")
         
         try:
-            self.sio.connect(server_url)
+            print(f"Connecting to {server_url}...")
+            self.sio.connect(server_url, namespaces=['/'])
+            print("Connected successfully!")
         except Exception as e:
             print(f"Connection error: {e}")
             self.signals.update_status.emit('CONNECTION FAILED')
@@ -125,14 +131,12 @@ class TimerDisplay(QWidget):
             self.close()
     
     def closeEvent(self, event):
-        if hasattr(self, 'sio'):
+        if hasattr(self, 'sio') and self.sio.connected:
             self.sio.disconnect()
         event.accept()
 
 if __name__ == '__main__':
-    # Change this to your DM Surface Pro's IP address
-    # Use 'localhost' if testing on the same machine
-    SERVER_URL = '10.0.0.167:5000'  # Update with actual IP for production
+    SERVER_URL = 'http://10.0.0.167:5000'  # DM Surface Pro IP
     
     app = QApplication(sys.argv)
     timer = TimerDisplay(SERVER_URL)

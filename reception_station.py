@@ -1,14 +1,13 @@
 import sys
 import socketio
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QVBoxLayout
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QObject
 from PyQt5.QtGui import QFont
 
 class ReceptionSignals(QObject):
     unlock = pyqtSignal()
     show_abort = pyqtSignal()
     abort_success = pyqtSignal()
-    show_warning = pyqtSignal(float)
     full_reset = pyqtSignal()
 
 class ReceptionStation(QWidget):
@@ -18,7 +17,6 @@ class ReceptionStation(QWidget):
         self.signals.unlock.connect(self.unlock_screen)
         self.signals.show_abort.connect(self.show_abort_button)
         self.signals.abort_success.connect(self.show_success)
-        self.signals.show_warning.connect(self.show_abort_failed_warning)
         self.signals.full_reset.connect(self.reset_to_locked)
         
         self.initUI()
@@ -74,11 +72,15 @@ class ReceptionStation(QWidget):
         self.setLayout(layout)
     
     def setup_socketio(self, server_url):
-        self.sio = socketio.Client()
+        self.sio = socketio.Client(logger=False, engineio_logger=False)
         
-        @self.sio.on('connect')
-        def on_connect():
+        @self.sio.event
+        def connect():
             print('Reception station connected')
+        
+        @self.sio.event
+        def disconnect():
+            print('Reception station disconnected')
         
         @self.sio.on('game_over')
         def on_game_over(data):
@@ -93,15 +95,6 @@ class ReceptionStation(QWidget):
         def on_aborted(data):
             self.signals.abort_success.emit()
         
-        @self.sio.on('abort_failed_warning')
-        def on_abort_warning(data):
-            time_diff = data.get('time_diff', 0)
-            self.signals.show_warning.emit(time_diff)
-        
-        @self.sio.on('abort_failed_full_reset')
-        def on_abort_failed_full_reset(data):
-            self.signals.full_reset.emit()
-        
         @self.sio.on('game_reset')
         def on_reset(data):
             self.signals.full_reset.emit()
@@ -110,10 +103,17 @@ class ReceptionStation(QWidget):
         def on_stopped(data):
             self.signals.full_reset.emit()
         
+        @self.sio.on('abort_failed_full_reset')
+        def on_abort_failed_full_reset(data):
+            self.signals.full_reset.emit()
+        
         try:
-            self.sio.connect(server_url)
+            print(f"Connecting to {server_url}...")
+            self.sio.connect(server_url, namespaces=['/'])
+            print("Connected successfully!")
         except Exception as e:
             print(f"Connection error: {e}")
+            self.message_label.setText(f'CONNECTION FAILED\n{str(e)}')
     
     def unlock_screen(self):
         self.locked_label.setText('✓ SYSTEM UNLOCKED ✓')
@@ -142,16 +142,7 @@ class ReceptionStation(QWidget):
         self.message_label.setStyleSheet("color: #00ff00;")
         self.abort_button.hide()
     
-    def show_abort_failed_warning(self, time_diff):
-        """Show warning message for 8 seconds before reset"""
-        self.locked_label.setText('❌ ABORT FAILED ❌')
-        self.locked_label.setStyleSheet("color: #ff0000;")
-        self.message_label.setText(f'BUTTONS NOT PRESSED SIMULTANEOUSLY\n\nTime Difference: {time_diff:.2f} seconds\nRequired: Within 10 seconds\n\nRESETTING IN 8 SECONDS...')
-        self.message_label.setStyleSheet("color: #ff0000;")
-        self.abort_button.hide()
-    
     def reset_to_locked(self):
-        """Reset reception station to initial locked state"""
         self.locked_label.setText('🔒 SYSTEM LOCKED 🔒')
         self.locked_label.setStyleSheet("color: #ff0000;")
         self.message_label.setText('ACCESS DENIED')
@@ -164,12 +155,12 @@ class ReceptionStation(QWidget):
             self.close()
     
     def closeEvent(self, event):
-        if hasattr(self, 'sio'):
+        if hasattr(self, 'sio') and self.sio.connected:
             self.sio.disconnect()
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = '10.0.0.167:5000'  # Update with DM's IP
+    SERVER_URL = 'http://10.0.0.167:5000'  # DM Surface Pro IP
     
     app = QApplication(sys.argv)
     station = ReceptionStation(SERVER_URL)
