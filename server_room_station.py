@@ -17,7 +17,6 @@ class ServerSignals(QObject):
     abort_reset = pyqtSignal()
     play_audio = pyqtSignal(str)
     game_reset = pyqtSignal()
-    game_over = pyqtSignal()
 
 class ServerRoomStation(QWidget):
     def __init__(self, server_url):
@@ -31,7 +30,6 @@ class ServerRoomStation(QWidget):
         self.signals.abort_reset.connect(self.reset_abort_button)
         self.signals.play_audio.connect(self.play_sound)
         self.signals.game_reset.connect(self.reset_station)
-        self.signals.game_over.connect(self.show_game_over)
         
         self.init_audio()
         self.initUI()
@@ -41,12 +39,8 @@ class ServerRoomStation(QWidget):
     def init_audio(self):
         """Initialize pygame mixer for audio"""
         pygame.mixer.init()
-        self.audio_path = 'audio/'
+        self.audio_path = 'audio/'  # Create this folder and add audio files
         self.stop_sounds = Event()
-        
-        # Reserve channel 0 for random background sounds
-        # Music channel will be used for important sounds (start, lose, self-destruct)
-        self.random_sound_channel = pygame.mixer.Channel(0)
     
     def initUI(self):
         self.setWindowTitle('Server Room Terminal')
@@ -145,15 +139,21 @@ class ServerRoomStation(QWidget):
         self.setLayout(layout)
     
     def setup_socketio(self, server_url):
-        self.sio = socketio.Client(logger=False, engineio_logger=False)
+        self.sio = socketio.Client()
+        self.heartbeat_timer = QTimer()
+        self.heartbeat_timer.timeout.connect(self.send_heartbeat)
         
-        @self.sio.event
-        def connect():
+        @self.sio.on('connect')
+        def on_connect():
             print('Server room station connected')
+            # Register this terminal
+            self.sio.emit('register_terminal', {'type': 'server_room'})
+            # Start sending heartbeats
+            self.heartbeat_timer.start(5000)  # Every 5 seconds
         
-        @self.sio.event
-        def disconnect():
-            print('Server room station disconnected')
+        @self.sio.on('registration_confirmed')
+        def on_registration(data):
+            print(f"Registration confirmed: {data['type']}")
         
         @self.sio.on('transmission_verifying')
         def on_verifying(data):
@@ -184,23 +184,34 @@ class ServerRoomStation(QWidget):
         def on_abort_failed_full_reset(data):
             self.signals.game_reset.emit()
         
-        @self.sio.on('game_over')
-        def on_game_over(data):
-            self.signals.game_over.emit()
-        
         @self.sio.on('play_audio')
         def on_play_audio(data):
             clip = data.get('clip')
             self.signals.play_audio.emit(clip)
         
         try:
-            print(f"Connecting to {server_url}...")
-            self.sio.connect(server_url, namespaces=['/'])
-            print("Connected successfully!")
+            self.sio.connect(server_url)
         except Exception as e:
             print(f"Connection error: {e}")
-            self.status_label.setText(f'CONNECTION FAILED\n{str(e)}')
-            self.status_label.setStyleSheet("color: #ff0000;")
+            self.report_error(f"Connection failed: {e}")
+    
+    def send_heartbeat(self):
+        """Send heartbeat to server"""
+        try:
+            self.sio.emit('heartbeat', {'type': 'server_room'})
+        except Exception as e:
+            print(f"Heartbeat error: {e}")
+    
+    def report_error(self, error_msg):
+        """Report error to DM"""
+        try:
+            self.sio.emit('terminal_error', {
+                'type': 'server_room',
+                'error': error_msg
+            })
+            print(f"Error reported to DM: {error_msg}")
+        except Exception as e:
+            print(f"Could not report error: {e}")
     
     def submit_code(self):
         code = self.code_input.text()
@@ -208,9 +219,17 @@ class ServerRoomStation(QWidget):
             return
         
         print(f"Submitting code: {code}")
-        self.sio.emit('check_transmission_code', {'code': code})
-        self.code_input.setEnabled(False)
-        self.submit_button.setEnabled(False)
+        try:
+            self.sio.emit('check_transmission_code', {'code': code})
+            self.code_input.setEnabled(False)
+            self.submit_button.setEnabled(False)
+        except Exception as e:
+            error_msg = f"Submit code error: {e}"
+            print(error_msg)
+            self.report_error(error_msg)
+            self.status_label.setText(f'ERROR: {str(e)}')
+            self.code_input.setEnabled(True)
+            self.submit_button.setEnabled(True)
     
     def show_verifying(self):
         self.status_label.setText('VERIFYING CODE...')
@@ -246,29 +265,24 @@ class ServerRoomStation(QWidget):
     
     def press_abort_button(self):
         print("Server room abort button pressed!")
-        self.sio.emit('abort_button_press', {'location': 'server_room'})
-        self.abort_button.setEnabled(False)
-        self.status_label.setText('BUTTON PRESSED!\nWAITING FOR RECEPTION...')
+        try:
+            self.sio.emit('abort_button_press', {'location': 'server_room'})
+            self.abort_button.setEnabled(False)
+            self.status_label.setText('BUTTON PRESSED!\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
+        except Exception as e:
+            error_msg = f"Abort button error: {e}"
+            print(error_msg)
+            self.report_error(error_msg)
+            self.status_label.setText(f'ERROR: {str(e)}')
+            self.abort_button.setEnabled(True)
     
     def show_success(self):
         self.title_label.setText('✓ MISSION COMPLETE ✓')
         self.title_label.setStyleSheet("color: #00ff00;")
         self.instruction_label.setText('SELF-DESTRUCT SEQUENCE ABORTED!')
         self.instruction_label.setStyleSheet("color: #00ff00;")
-        self.status_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
+        self.status_label.setText('YOU HAVE SAVED THE FACILITY!')
         self.status_label.setStyleSheet("color: #00ff00;")
-        self.abort_button.hide()
-        self.stop_sounds.set()
-    
-    def show_game_over(self):
-        self.title_label.setText('⏰ TIME EXPIRED ⏰')
-        self.title_label.setStyleSheet("color: #ff0000;")
-        self.instruction_label.setText('MISSION FAILED')
-        self.instruction_label.setStyleSheet("color: #ff0000;")
-        self.status_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
-        self.status_label.setStyleSheet("color: #ffaa00;")
-        self.code_input.hide()
-        self.submit_button.hide()
         self.abort_button.hide()
         self.stop_sounds.set()
     
@@ -290,34 +304,21 @@ class ServerRoomStation(QWidget):
         self.status_label.setText('')
         self.abort_button.hide()
         self.abort_button.setEnabled(True)
-        # Random sounds continue playing - don't touch stop_sounds
     
     def play_sound(self, clip_name):
-        """Play audio clip - important sounds use music channel"""
+        """Play audio clip"""
         try:
             audio_file = os.path.join(self.audio_path, f'{clip_name}.mp3')
             if os.path.exists(audio_file):
-                # Important game sounds (start, lose, self-destruct) use music channel
-                if clip_name in ['start', 'lose', 'self_destruct_initiated', 'self_destruct_aborted']:
-                    # Stop any random sounds playing
-                    self.random_sound_channel.stop()
-                    # Play important sound on music channel
-                    pygame.mixer.music.load(audio_file)
-                    pygame.mixer.music.play()
-                    print(f"Playing important sound: {clip_name}")
-                else:
-                    # Random/manual sounds use sound effect channel (won't interrupt music)
-                    # Only play if music channel is not busy
-                    if not pygame.mixer.music.get_busy():
-                        sound = pygame.mixer.Sound(audio_file)
-                        self.random_sound_channel.play(sound)
-                        print(f"Playing background sound: {clip_name}")
-                    else:
-                        print(f"Skipping {clip_name} - important sound is playing")
+                pygame.mixer.music.load(audio_file)
+                pygame.mixer.music.play()
+                print(f"Playing: {clip_name}")
             else:
                 print(f"Audio file not found: {audio_file}")
         except Exception as e:
-            print(f"Error playing audio: {e}")
+            error_msg = f"Audio playback error: {e}"
+            print(error_msg)
+            self.report_error(error_msg)
     
     def start_random_sounds(self):
         """Background thread for random creepy sounds"""
@@ -329,12 +330,9 @@ class ServerRoomStation(QWidget):
                 if self.stop_sounds.wait(wait_time):
                     break
                 
-                # Only play random sound if no important sound is playing
-                if not pygame.mixer.music.get_busy():
-                    sound = random.choice(creepy_sounds)
-                    self.play_sound(sound)
-                else:
-                    print("Skipping random sound - important audio is playing")
+                # Play random creepy sound
+                sound = random.choice(creepy_sounds)
+                self.play_sound(sound)
         
         sound_thread = Thread(target=random_sound_loop, daemon=True)
         sound_thread.start()
@@ -345,13 +343,14 @@ class ServerRoomStation(QWidget):
     
     def closeEvent(self, event):
         self.stop_sounds.set()
-        if hasattr(self, 'sio') and self.sio.connected:
+        self.heartbeat_timer.stop()
+        if hasattr(self, 'sio'):
             self.sio.disconnect()
         pygame.mixer.quit()
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = 'http://10.0.0.167:5000'  # DM Mac IP
+    SERVER_URL = 'http://10.0.0.167:5000'  # Update with DM's IP for production
     
     app = QApplication(sys.argv)
     station = ServerRoomStation(SERVER_URL)

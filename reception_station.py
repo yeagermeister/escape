@@ -1,7 +1,7 @@
 import sys
 import socketio
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QVBoxLayout
-from PyQt5.QtCore import Qt, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
 from PyQt5.QtGui import QFont
 
 class ReceptionSignals(QObject):
@@ -72,15 +72,21 @@ class ReceptionStation(QWidget):
         self.setLayout(layout)
     
     def setup_socketio(self, server_url):
-        self.sio = socketio.Client(logger=False, engineio_logger=False)
+        self.sio = socketio.Client()
+        self.heartbeat_timer = QTimer()
+        self.heartbeat_timer.timeout.connect(self.send_heartbeat)
         
-        @self.sio.event
-        def connect():
+        @self.sio.on('connect')
+        def on_connect():
             print('Reception station connected')
+            # Register this terminal
+            self.sio.emit('register_terminal', {'type': 'reception'})
+            # Start sending heartbeats
+            self.heartbeat_timer.start(5000)  # Every 5 seconds
         
-        @self.sio.event
-        def disconnect():
-            print('Reception station disconnected')
+        @self.sio.on('registration_confirmed')
+        def on_registration(data):
+            print(f"Registration confirmed: {data['type']}")
         
         @self.sio.on('game_over')
         def on_game_over(data):
@@ -108,18 +114,34 @@ class ReceptionStation(QWidget):
             self.signals.full_reset.emit()
         
         try:
-            print(f"Connecting to {server_url}...")
-            self.sio.connect(server_url, namespaces=['/'])
-            print("Connected successfully!")
+            self.sio.connect(server_url)
         except Exception as e:
             print(f"Connection error: {e}")
-            self.message_label.setText(f'CONNECTION FAILED\n{str(e)}')
+            self.report_error(f"Connection failed: {e}")
+    
+    def send_heartbeat(self):
+        """Send heartbeat to server"""
+        try:
+            self.sio.emit('heartbeat', {'type': 'reception'})
+        except Exception as e:
+            print(f"Heartbeat error: {e}")
+    
+    def report_error(self, error_msg):
+        """Report error to DM"""
+        try:
+            self.sio.emit('terminal_error', {
+                'type': 'reception',
+                'error': error_msg
+            })
+            print(f"Error reported to DM: {error_msg}")
+        except Exception as e:
+            print(f"Could not report error: {e}")
     
     def unlock_screen(self):
-        self.locked_label.setText('⏰ TIME EXPIRED ⏰')
-        self.locked_label.setStyleSheet("color: #ff0000;")
-        self.message_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
-        self.message_label.setStyleSheet("color: #ffaa00;")
+        self.locked_label.setText('✓ SYSTEM UNLOCKED ✓')
+        self.locked_label.setStyleSheet("color: #00ff00;")
+        self.message_label.setText('ACCESS GRANTED')
+        self.message_label.setStyleSheet("color: #00ff00;")
         self.abort_button.hide()
     
     def show_abort_button(self):
@@ -131,14 +153,21 @@ class ReceptionStation(QWidget):
     
     def press_abort_button(self):
         print("Reception abort button pressed!")
-        self.sio.emit('abort_button_press', {'location': 'reception'})
-        self.abort_button.setEnabled(False)
-        self.message_label.setText('BUTTON PRESSED!\nWAITING FOR SERVER ROOM...')
+        try:
+            self.sio.emit('abort_button_press', {'location': 'reception'})
+            self.abort_button.setEnabled(False)
+            self.message_label.setText('BUTTON PRESSED!\nWAITING FOR SERVER ROOM...')
+        except Exception as e:
+            error_msg = f"Abort button error: {e}"
+            print(error_msg)
+            self.report_error(error_msg)
+            self.message_label.setText(f'ERROR: {str(e)}')
+            self.abort_button.setEnabled(True)
     
     def show_success(self):
         self.locked_label.setText('✓ MISSION COMPLETE ✓')
         self.locked_label.setStyleSheet("color: #00ff00;")
-        self.message_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
+        self.message_label.setText('SELF-DESTRUCT SEQUENCE ABORTED!')
         self.message_label.setStyleSheet("color: #00ff00;")
         self.abort_button.hide()
     
@@ -155,12 +184,13 @@ class ReceptionStation(QWidget):
             self.close()
     
     def closeEvent(self, event):
-        if hasattr(self, 'sio') and self.sio.connected:
+        self.heartbeat_timer.stop()
+        if hasattr(self, 'sio'):
             self.sio.disconnect()
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = 'http://10.0.0.167:5000'  # DM Mac IP
+    SERVER_URL = 'http://10.0.0.167:5000'  # Update with DM's IP
     
     app = QApplication(sys.argv)
     station = ReceptionStation(SERVER_URL)
