@@ -17,11 +17,12 @@ class ServerSignals(QObject):
     abort_reset = pyqtSignal()
     play_audio = pyqtSignal(str)
     game_reset = pyqtSignal()
-    game_over = pyqtSignal()
+    connection_status = pyqtSignal(bool)  # True = connected, False = disconnected
 
 class ServerRoomStation(QWidget):
     def __init__(self, server_url):
         super().__init__()
+        self.server_url = server_url
         self.signals = ServerSignals()
         self.signals.transmission_verifying.connect(self.show_verifying)
         self.signals.transmission_success.connect(self.show_self_destruct)
@@ -31,22 +32,31 @@ class ServerRoomStation(QWidget):
         self.signals.abort_reset.connect(self.reset_abort_button)
         self.signals.play_audio.connect(self.play_sound)
         self.signals.game_reset.connect(self.reset_station)
-        self.signals.game_over.connect(self.show_game_over)
+        self.signals.connection_status.connect(self.update_connection_status)
         
         self.init_audio()
         self.initUI()
+        
+        # Create timer in the main GUI thread
+        self.reset_timer = QTimer(self)
+        self.reset_timer.setSingleShot(True)
+        self.reset_timer.timeout.connect(self.reset_input)
+        
+        # Reconnection timer
+        self.reconnect_timer = QTimer(self)
+        self.reconnect_timer.timeout.connect(self.attempt_reconnect)
+        
         self.setup_socketio(server_url)
         self.start_random_sounds()
     
     def init_audio(self):
         """Initialize pygame mixer for audio"""
         pygame.mixer.init()
-        self.audio_path = 'audio/'
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.audio_path = os.path.join(script_dir, 'audio')
+        if not os.path.exists(self.audio_path):
+            os.makedirs(self.audio_path)
         self.stop_sounds = Event()
-        
-        # Reserve channel 0 for random background sounds
-        # Music channel will be used for important sounds (start, lose, self-destruct)
-        self.random_sound_channel = pygame.mixer.Channel(0)
     
     def initUI(self):
         self.setWindowTitle('Server Room Terminal')
@@ -55,6 +65,19 @@ class ServerRoomStation(QWidget):
         
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignCenter)
+        
+        # Connection status indicator (small, top corner)
+        self.connection_label = QLabel('● CONNECTED', self)
+        self.connection_label.setStyleSheet("""
+            color: #00ff00;
+            font-size: 16px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 5px 10px;
+            border: 1px solid #00ff00;
+            border-radius: 5px;
+        """)
+        self.connection_label.setFixedSize(180, 30)
+        self.connection_label.move(20, 20)  # Top-left corner
         
         # Title
         self.title_label = QLabel('SERVER CONTROL TERMINAL', self)
@@ -145,15 +168,26 @@ class ServerRoomStation(QWidget):
         self.setLayout(layout)
     
     def setup_socketio(self, server_url):
-        self.sio = socketio.Client(logger=False, engineio_logger=False)
+        self.sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1, reconnection_delay_max=5)
         
-        @self.sio.event
-        def connect():
-            print('Server room station connected')
+        @self.sio.on('connect')
+        def on_connect():
+            print('✓ Server room station connected')
+            self.signals.connection_status.emit(True)
+            self.reconnect_timer.stop()
         
-        @self.sio.event
-        def disconnect():
-            print('Server room station disconnected')
+        @self.sio.on('disconnect')
+        def on_disconnect():
+            print('✗ Server room station disconnected')
+            self.signals.connection_status.emit(False)
+            # Start trying to reconnect every 3 seconds
+            if not self.reconnect_timer.isActive():
+                self.reconnect_timer.start(3000)
+        
+        @self.sio.on('connect_error')
+        def on_connect_error(data):
+            print(f'Connection error: {data}')
+            self.signals.connection_status.emit(False)
         
         @self.sio.on('transmission_verifying')
         def on_verifying(data):
@@ -184,33 +218,71 @@ class ServerRoomStation(QWidget):
         def on_abort_failed_full_reset(data):
             self.signals.game_reset.emit()
         
-        @self.sio.on('game_over')
-        def on_game_over(data):
-            self.signals.game_over.emit()
-        
         @self.sio.on('play_audio')
         def on_play_audio(data):
             clip = data.get('clip')
             self.signals.play_audio.emit(clip)
         
         try:
-            print(f"Connecting to {server_url}...")
-            self.sio.connect(server_url, namespaces=['/'])
-            print("Connected successfully!")
+            self.sio.connect(server_url)
         except Exception as e:
-            print(f"Connection error: {e}")
-            self.status_label.setText(f'CONNECTION FAILED\n{str(e)}')
-            self.status_label.setStyleSheet("color: #ff0000;")
+            print(f"Initial connection error: {e}")
+            self.signals.connection_status.emit(False)
+            self.reconnect_timer.start(3000)
+    
+    def attempt_reconnect(self):
+        """Try to reconnect to the server"""
+        if not self.sio.connected:
+            print("Attempting to reconnect...")
+            try:
+                self.sio.connect(self.server_url)
+            except Exception as e:
+                print(f"Reconnection failed: {e}")
+    
+    def update_connection_status(self, connected):
+        """Update the connection status indicator"""
+        if connected:
+            self.connection_label.setText('● CONNECTED')
+            self.connection_label.setStyleSheet("""
+                color: #00ff00;
+                font-size: 16px;
+                background-color: rgba(0, 0, 0, 0.7);
+                padding: 5px 10px;
+                border: 1px solid #00ff00;
+                border-radius: 5px;
+            """)
+        else:
+            self.connection_label.setText('● DISCONNECTED')
+            self.connection_label.setStyleSheet("""
+                color: #ff0000;
+                font-size: 16px;
+                background-color: rgba(0, 0, 0, 0.7);
+                padding: 5px 10px;
+                border: 1px solid #ff0000;
+                border-radius: 5px;
+            """)
     
     def submit_code(self):
         code = self.code_input.text()
         if not code:
             return
         
+        # Check if connected before submitting
+        if not self.sio.connected:
+            self.status_label.setText('ERROR: NOT CONNECTED TO SERVER')
+            self.status_label.setStyleSheet("color: #ff0000;")
+            return
+        
         print(f"Submitting code: {code}")
-        self.sio.emit('check_transmission_code', {'code': code})
-        self.code_input.setEnabled(False)
-        self.submit_button.setEnabled(False)
+        try:
+            self.sio.emit('check_transmission_code', {'code': code})
+            self.code_input.setEnabled(False)
+            self.submit_button.setEnabled(False)
+        except Exception as e:
+            print(f"Error submitting code: {e}")
+            self.status_label.setText('ERROR: CONNECTION LOST')
+            self.status_label.setStyleSheet("color: #ff0000;")
+            self.reset_timer.start(3000)
     
     def show_verifying(self):
         self.status_label.setText('VERIFYING CODE...')
@@ -221,8 +293,8 @@ class ServerRoomStation(QWidget):
         self.status_label.setStyleSheet("color: #ff0000;")
         self.code_input.clear()
         
-        # Re-enable input after 3 seconds
-        QTimer.singleShot(3000, self.reset_input)
+        # Re-enable input after 3 seconds using the timer created in __init__
+        self.reset_timer.start(3000)
     
     def reset_input(self):
         self.code_input.setEnabled(True)
@@ -245,30 +317,29 @@ class ServerRoomStation(QWidget):
         self.abort_button.show()
     
     def press_abort_button(self):
+        # Check if connected before pressing abort
+        if not self.sio.connected:
+            self.status_label.setText('ERROR: NOT CONNECTED TO SERVER')
+            self.status_label.setStyleSheet("color: #ff0000;")
+            return
+        
         print("Server room abort button pressed!")
-        self.sio.emit('abort_button_press', {'location': 'server_room'})
-        self.abort_button.setEnabled(False)
-        self.status_label.setText('BUTTON PRESSED!\nWAITING FOR RECEPTION...')
+        try:
+            self.sio.emit('abort_button_press', {'location': 'server_room'})
+            self.abort_button.setEnabled(False)
+            self.status_label.setText('BUTTON PRESSED!\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
+        except Exception as e:
+            print(f"Error pressing abort button: {e}")
+            self.status_label.setText('ERROR: CONNECTION LOST')
+            self.status_label.setStyleSheet("color: #ff0000;")
     
     def show_success(self):
         self.title_label.setText('✓ MISSION COMPLETE ✓')
         self.title_label.setStyleSheet("color: #00ff00;")
         self.instruction_label.setText('SELF-DESTRUCT SEQUENCE ABORTED!')
         self.instruction_label.setStyleSheet("color: #00ff00;")
-        self.status_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
+        self.status_label.setText('YOU HAVE SAVED THE FACILITY!')
         self.status_label.setStyleSheet("color: #00ff00;")
-        self.abort_button.hide()
-        self.stop_sounds.set()
-    
-    def show_game_over(self):
-        self.title_label.setText('⏰ TIME EXPIRED ⏰')
-        self.title_label.setStyleSheet("color: #ff0000;")
-        self.instruction_label.setText('MISSION FAILED')
-        self.instruction_label.setStyleSheet("color: #ff0000;")
-        self.status_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
-        self.status_label.setStyleSheet("color: #ffaa00;")
-        self.code_input.hide()
-        self.submit_button.hide()
         self.abort_button.hide()
         self.stop_sounds.set()
     
@@ -290,32 +361,26 @@ class ServerRoomStation(QWidget):
         self.status_label.setText('')
         self.abort_button.hide()
         self.abort_button.setEnabled(True)
-        # Random sounds continue playing - don't touch stop_sounds
     
     def play_sound(self, clip_name):
-        """Play audio clip - important sounds use music channel"""
+        """Play audio clip"""
         try:
-            audio_file = os.path.join(self.audio_path, f'{clip_name}.mp3')
-            if os.path.exists(audio_file):
-                # Important game sounds (start, lose, self-destruct) use music channel
-                if clip_name in ['start', 'lose', 'self_destruct_initiated', 'self_destruct_aborted']:
-                    # Stop any random sounds playing
-                    self.random_sound_channel.stop()
-                    # Play important sound on music channel
-                    pygame.mixer.music.load(audio_file)
-                    pygame.mixer.music.play()
-                    print(f"Playing important sound: {clip_name}")
-                else:
-                    # Random/manual sounds use sound effect channel (won't interrupt music)
-                    # Only play if music channel is not busy
-                    if not pygame.mixer.music.get_busy():
-                        sound = pygame.mixer.Sound(audio_file)
-                        self.random_sound_channel.play(sound)
-                        print(f"Playing background sound: {clip_name}")
-                    else:
-                        print(f"Skipping {clip_name} - important sound is playing")
+            extensions = ['.mp3', '.wav', '.ogg']
+            audio_file = None
+            
+            for ext in extensions:
+                test_file = os.path.join(self.audio_path, f'{clip_name}{ext}')
+                if os.path.exists(test_file):
+                    audio_file = test_file
+                    break
+            
+            if audio_file:
+                pygame.mixer.music.load(audio_file)
+                pygame.mixer.music.set_volume(0.8)
+                pygame.mixer.music.play()
+                print(f"✓ Playing: {clip_name}")
             else:
-                print(f"Audio file not found: {audio_file}")
+                print(f"✗ Audio file not found: {clip_name}")
         except Exception as e:
             print(f"Error playing audio: {e}")
     
@@ -329,12 +394,9 @@ class ServerRoomStation(QWidget):
                 if self.stop_sounds.wait(wait_time):
                     break
                 
-                # Only play random sound if no important sound is playing
-                if not pygame.mixer.music.get_busy():
-                    sound = random.choice(creepy_sounds)
-                    self.play_sound(sound)
-                else:
-                    print("Skipping random sound - important audio is playing")
+                # Play random creepy sound
+                sound = random.choice(creepy_sounds)
+                self.play_sound(sound)
         
         sound_thread = Thread(target=random_sound_loop, daemon=True)
         sound_thread.start()
@@ -345,13 +407,14 @@ class ServerRoomStation(QWidget):
     
     def closeEvent(self, event):
         self.stop_sounds.set()
-        if hasattr(self, 'sio') and self.sio.connected:
+        self.reconnect_timer.stop()
+        if hasattr(self, 'sio'):
             self.sio.disconnect()
         pygame.mixer.quit()
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = 'http://10.0.0.167:5000'  # DM Mac IP
+    SERVER_URL = 'http://10.0.0.167:5000'  # Update with DM's IP for production
     
     app = QApplication(sys.argv)
     station = ServerRoomStation(SERVER_URL)

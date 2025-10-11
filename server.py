@@ -67,6 +67,7 @@ def handle_start_timer():
     
     # Emit to all clients
     socketio.emit('timer_started', get_serializable_state(), namespace='/')
+    socketio.emit('play_audio', {'clip': 'start'}, namespace='/')
 
 def countdown_timer():
     """Background task to update timer every second"""
