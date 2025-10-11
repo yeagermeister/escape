@@ -46,9 +46,32 @@ class ServerRoomStation(QWidget):
     
     def init_audio(self):
         """Initialize pygame mixer for audio"""
-        pygame.mixer.init()
-        self.audio_path = 'audio/'  # Create this folder and add audio files
-        self.stop_sounds = Event()
+        try:
+            # Initialize with more compatible settings
+            pygame.mixer.quit()  # Quit any existing mixer
+            pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+            
+            # Get the directory where this script is located
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            self.audio_path = os.path.join(script_dir, 'audio')
+            
+            # Create audio folder if it doesn't exist
+            if not os.path.exists(self.audio_path):
+                os.makedirs(self.audio_path)
+                print(f"Created audio folder at: {self.audio_path}")
+            
+            print(f"Audio path set to: {self.audio_path}")
+            
+            # List available audio files
+            if os.path.exists(self.audio_path):
+                audio_files = [f for f in os.listdir(self.audio_path) if f.endswith(('.mp3', '.wav', '.ogg'))]
+                print(f"Available audio files: {audio_files}")
+            
+            self.stop_sounds = Event()
+            
+        except Exception as e:
+            print(f"Error initializing audio: {e}")
+            self.audio_path = None
     
     def initUI(self):
         self.setWindowTitle('Server Room Terminal')
@@ -271,16 +294,41 @@ class ServerRoomStation(QWidget):
     
     def play_sound(self, clip_name):
         """Play audio clip"""
+        if not self.audio_path:
+            print("Audio system not initialized")
+            return
+            
         try:
-            audio_file = os.path.join(self.audio_path, f'{clip_name}.mp3')
-            if os.path.exists(audio_file):
+            # Try multiple file extensions
+            extensions = ['.mp3', '.wav', '.ogg']
+            audio_file = None
+            
+            for ext in extensions:
+                test_file = os.path.join(self.audio_path, f'{clip_name}{ext}')
+                if os.path.exists(test_file):
+                    audio_file = test_file
+                    break
+            
+            if audio_file:
+                print(f"Attempting to play: {audio_file}")
+                
+                # Stop any currently playing sound
+                pygame.mixer.music.stop()
+                
+                # Load and play
                 pygame.mixer.music.load(audio_file)
+                pygame.mixer.music.set_volume(0.8)  # Set volume to 80%
                 pygame.mixer.music.play()
-                print(f"Playing: {clip_name}")
+                
+                print(f"✓ Playing: {clip_name}")
             else:
-                print(f"Audio file not found: {audio_file}")
+                print(f"✗ Audio file not found: {clip_name} (tried {extensions})")
+                print(f"   Looking in: {self.audio_path}")
+                
+        except pygame.error as e:
+            print(f"✗ Pygame error playing audio '{clip_name}': {e}")
         except Exception as e:
-            print(f"Error playing audio: {e}")
+            print(f"✗ Error playing audio '{clip_name}': {e}")
     
     def start_random_sounds(self):
         """Background thread for random creepy sounds"""
@@ -311,7 +359,7 @@ class ServerRoomStation(QWidget):
         event.accept()
 
 if __name__ == '__main__':
-    SERVER_URL = 'http://10.0.0.167:5000'  # Update with DM's IP for production
+    SERVER_URL = 'http://localhost:5000'  # Update with DM's IP for production
     
     app = QApplication(sys.argv)
     station = ServerRoomStation(SERVER_URL)
