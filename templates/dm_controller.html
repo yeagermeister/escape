@@ -4,76 +4,6 @@
     <title>Escape Room - DM Controller</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
-        .terminal-monitor {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 15px;
-        margin: 20px 0;
-    }
-
-    .terminal-card {
-        background: #000;
-        border: 2px solid #666;
-        padding: 15px;
-        border-radius: 5px;
-        text-align: center;
-        transition: all 0.3s;
-    }
-
-    .terminal-card.connected {
-        border-color: #00ff00;
-        box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
-    }
-
-    .terminal-card.disconnected {
-        border-color: #ff0000;
-        box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
-    }
-
-    .terminal-name {
-        font-size: 1.2em;
-        font-weight: bold;
-        margin-bottom: 10px;
-    }
-
-    .terminal-indicator {
-        width: 20px;
-        height: 20px;
-        border-radius: 50%;
-        background: #666;
-        margin: 10px auto;
-        transition: all 0.3s;
-    }
-
-    .terminal-card.connected .terminal-indicator {
-        background: #00ff00;
-        box-shadow: 0 0 10px #00ff00;
-        animation: pulse-slow 2s infinite;
-    }
-
-    .terminal-card.disconnected .terminal-indicator {
-        background: #ff0000;
-        box-shadow: 0 0 10px #ff0000;
-    }
-
-    @keyframes pulse-slow {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.6; }
-    }
-
-    .terminal-info {
-        font-size: 0.9em;
-        color: #888;
-        margin-top: 10px;
-    }
-
-    .terminal-errors {
-        font-size: 0.8em;
-        color: #ff0000;
-        margin-top: 10px;
-        max-height: 60px;
-        overflow-y: auto;
-    }
         body {
             font-family: 'Courier New', monospace;
             background: #1a1a1a;
@@ -303,29 +233,6 @@
             </div>
         </div>
 
-        <div class="panel">
-            <h2>🖥️ TERMINAL STATUS</h2>
-            <div class="terminal-monitor">
-                <div class="terminal-card disconnected" id="timerTerminal">
-                    <div class="terminal-name">Timer Display</div>
-                    <div class="terminal-indicator"></div>
-                    <div class="terminal-info" id="timerInfo">Disconnected</div>
-                    <div class="terminal-errors" id="timerErrors"></div>
-                </div>
-                <div class="terminal-card disconnected" id="receptionTerminal">
-                    <div class="terminal-name">Reception</div>
-                    <div class="terminal-indicator"></div>
-                    <div class="terminal-info" id="receptionInfo">Disconnected</div>
-                    <div class="terminal-errors" id="receptionErrors"></div>
-                </div>
-                <div class="terminal-card disconnected" id="serverTerminal">
-                    <div class="terminal-name">Server Room</div>
-                    <div class="terminal-indicator"></div>
-                    <div class="terminal-info" id="serverInfo">Disconnected</div>
-                    <div class="terminal-errors" id="serverErrors"></div>
-                </div>
-            </div>
-        </div>
         <div class="panel" id="abortPanel" style="display: none;">
             <h2>🚨 ABORT SEQUENCE STATUS</h2>
             <div class="abort-status">
@@ -497,84 +404,6 @@
             document.getElementById('resumeBtn').style.display = 'none';
             document.getElementById('stopBtn').disabled = true;
         });
-
-        socket.on('terminal_connected', (data) => {
-            updateTerminalStatus(data.terminal, true);
-            addLog(`✓ ${data.terminal} connected`, 'success');
-        });
-
-        socket.on('terminal_disconnected', (data) => {
-            updateTerminalStatus(data.terminal, false);
-            addLog(`✗ ${data.terminal} disconnected: ${data.reason}`, 'error');
-        });
-
-        socket.on('terminal_status', (status) => {
-            for (const [terminal, info] of Object.entries(status)) {
-                updateTerminalStatus(terminal, info.connected, info);
-            }
-        });
-
-        socket.on('terminal_error_report', (data) => {
-            addLog(`⚠️ ERROR from ${data.terminal}: ${data.error}`, 'error');
-            updateTerminalErrors(data.terminal, data.error);
-        });
-
-        function updateTerminalStatus(terminal, connected, info = null) {
-            const cardMap = {
-                'timer_display': 'timerTerminal',
-                'reception': 'receptionTerminal',
-                'server_room': 'serverTerminal'
-            };
-            
-            const infoMap = {
-                'timer_display': 'timerInfo',
-                'reception': 'receptionInfo',
-                'server_room': 'serverInfo'
-            };
-            
-            const cardId = cardMap[terminal];
-            const infoId = infoMap[terminal];
-            
-            if (cardId && infoId) {
-                const card = document.getElementById(cardId);
-                const infoEl = document.getElementById(infoId);
-                
-                if (connected) {
-                    card.classList.remove('disconnected');
-                    card.classList.add('connected');
-                    infoEl.textContent = 'Connected';
-                    infoEl.style.color = '#00ff00';
-                } else {
-                    card.classList.remove('connected');
-                    card.classList.add('disconnected');
-                    infoEl.textContent = 'Disconnected';
-                    infoEl.style.color = '#ff0000';
-                }
-                
-                if (info && info.errors && info.errors.length > 0) {
-                    updateTerminalErrors(terminal, info.errors[info.errors.length - 1].message);
-                }
-            }
-        }
-
-        function updateTerminalErrors(terminal, error) {
-            const errorMap = {
-                'timer_display': 'timerErrors',
-                'reception': 'receptionErrors',
-                'server_room': 'serverErrors'
-            };
-            
-            const errorId = errorMap[terminal];
-            if (errorId) {
-                const errorEl = document.getElementById(errorId);
-                errorEl.textContent = error;
-            }
-        }
-
-        // Request status update every 10 seconds
-        setInterval(() => {
-            socket.emit('request_terminal_status');
-        }, 10000);
 
         function startTimer() {
             socket.emit('start_timer');

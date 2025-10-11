@@ -1,7 +1,7 @@
 import sys
 import socketio
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QVBoxLayout
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QObject
 from PyQt5.QtGui import QFont
 
 class TimerSignals(QObject):
@@ -51,22 +51,16 @@ class TimerDisplay(QWidget):
         self.setLayout(layout)
     
     def setup_socketio(self, server_url):
-        self.sio = socketio.Client()
-        self.heartbeat_timer = QTimer()
-        self.heartbeat_timer.timeout.connect(self.send_heartbeat)
+        self.sio = socketio.Client(logger=False, engineio_logger=False)
         
-        @self.sio.on('connect')
-        def on_connect():
-            print('Connected to server')
-            # Register this terminal
-            self.sio.emit('register_terminal', {'type': 'timer_display'})
-            # Start sending heartbeats
-            self.heartbeat_timer.start(5000)  # Every 5 seconds
+        @self.sio.event
+        def connect():
+            print('Timer display connected')
             self.signals.update_status.emit('CONNECTED')
         
-        @self.sio.on('registration_confirmed')
-        def on_registration(data):
-            print(f"Registration confirmed: {data['type']}")
+        @self.sio.event
+        def disconnect():
+            print('Timer display disconnected')
         
         @self.sio.on('timer_update')
         def on_timer_update(data):
@@ -87,7 +81,7 @@ class TimerDisplay(QWidget):
         
         @self.sio.on('game_over')
         def on_game_over(data):
-            self.signals.update_status.emit('TIME UP!')
+            self.signals.update_status.emit('PRESS EXIT BUTTON')
             self.timer_label.setStyleSheet("color: #ff0000; font-weight: bold;")
         
         @self.sio.on('game_reset')
@@ -104,33 +98,16 @@ class TimerDisplay(QWidget):
         
         @self.sio.on('self_destruct_aborted')
         def on_aborted(data):
-            self.signals.update_status.emit('MISSION COMPLETE!')
+            self.signals.update_status.emit('PRESS EXIT BUTTON')
             self.timer_label.setStyleSheet("color: #00ff00; font-weight: bold;")
         
         try:
-            self.sio.connect(server_url)
+            print(f"Connecting to {server_url}...")
+            self.sio.connect(server_url, namespaces=['/'])
+            print("Connected successfully!")
         except Exception as e:
             print(f"Connection error: {e}")
-            self.report_error(f"Connection failed: {e}")
             self.signals.update_status.emit('CONNECTION FAILED')
-    
-    def send_heartbeat(self):
-        """Send heartbeat to server"""
-        try:
-            self.sio.emit('heartbeat', {'type': 'timer_display'})
-        except Exception as e:
-            print(f"Heartbeat error: {e}")
-    
-    def report_error(self, error_msg):
-        """Report error to DM"""
-        try:
-            self.sio.emit('terminal_error', {
-                'type': 'timer_display',
-                'error': error_msg
-            })
-            print(f"Error reported to DM: {error_msg}")
-        except Exception as e:
-            print(f"Could not report error: {e}")
     
     def update_display(self, time_remaining):
         minutes = time_remaining // 60
@@ -154,15 +131,12 @@ class TimerDisplay(QWidget):
             self.close()
     
     def closeEvent(self, event):
-        self.heartbeat_timer.stop()
-        if hasattr(self, 'sio'):
+        if hasattr(self, 'sio') and self.sio.connected:
             self.sio.disconnect()
         event.accept()
 
 if __name__ == '__main__':
-    # Change this to your DM Surface Pro's IP address
-    # Use 'localhost' if testing on the same machine
-    SERVER_URL = 'http://10.0.0.167:5000'  # Update with actual IP for production
+    SERVER_URL = 'http://10.0.0.167:5000'  # DM Mac IP
     
     app = QApplication(sys.argv)
     timer = TimerDisplay(SERVER_URL)

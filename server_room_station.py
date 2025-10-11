@@ -1,236 +1,358 @@
-from flask import Flask, render_template, request
-from flask_socketio import SocketIO, emit
-from flask_cors import CORS
-import eventlet
-from datetime import datetime, timedelta
+import sys
+import socketio
+import pygame
+import os
+import random
+from threading import Thread, Event
+from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
+from PyQt5.QtGui import QFont
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'escape_room_secret_2024'
-CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+class ServerSignals(QObject):
+    transmission_verifying = pyqtSignal()
+    transmission_success = pyqtSignal()
+    transmission_failed = pyqtSignal(str)
+    show_abort = pyqtSignal()
+    abort_success = pyqtSignal()
+    abort_reset = pyqtSignal()
+    play_audio = pyqtSignal(str)
+    game_reset = pyqtSignal()
+    game_over = pyqtSignal()
 
-# Game state
-game_state = {
-    'timer_running': False,
-    'time_remaining': 1800,  # 30 minutes in seconds
-    'start_time': None,
-    'reception_unlocked': False,
-    'transmission_shut_down': False,
-    'self_destruct_active': False,
-    'self_destruct_aborted': False,
-    'abort_buttons': {
-        'reception': None,
-        'server_room': None
-    }
-}
-
-# Codes
-TRANSMISSION_CODE = "4815162342"
-ABORT_WINDOW_SECONDS = 10
-
-def get_serializable_state():
-    """Return a JSON-serializable version of game_state"""
-    return {
-        'timer_running': game_state['timer_running'],
-        'time_remaining': game_state['time_remaining'],
-        'reception_unlocked': game_state['reception_unlocked'],
-        'transmission_shut_down': game_state['transmission_shut_down'],
-        'self_destruct_active': game_state['self_destruct_active'],
-        'self_destruct_aborted': game_state['self_destruct_aborted']
-    }
-
-@app.route('/')
-def index():
-    return render_template('dm_controller.html')
-
-@socketio.on('connect')
-def handle_connect():
-    print(f'Client connected: {request.sid}')
-    emit('game_state', get_serializable_state())
-
-@socketio.on('start_timer')
-def handle_start_timer():
-    """Start the 30-minute countdown"""
-    game_state['timer_running'] = True
-    game_state['start_time'] = datetime.now()
-    game_state['time_remaining'] = 1800
-    game_state['reception_unlocked'] = False
-    game_state['transmission_shut_down'] = False
-    game_state['self_destruct_active'] = False
-    game_state['self_destruct_aborted'] = False
-    game_state['abort_buttons'] = {'reception': None, 'server_room': None}
-    
-    print("Timer started!")
-    
-    # Start countdown loop
-    socketio.start_background_task(countdown_timer)
-    
-    # Emit to all clients
-    socketio.emit('timer_started', get_serializable_state(), namespace='/')
-
-def countdown_timer():
-    """Background task to update timer every second"""
-    while game_state['timer_running'] and game_state['time_remaining'] > 0:
-        eventlet.sleep(1)
-        game_state['time_remaining'] -= 1
-        socketio.emit('timer_update', {
-            'time_remaining': game_state['time_remaining']
-        }, namespace='/')
-    
-    if game_state['time_remaining'] <= 0:
-        game_state['timer_running'] = False
-        game_state['reception_unlocked'] = True
-        socketio.emit('game_over', {'success': False}, namespace='/')
-
-@socketio.on('pause_timer')
-def handle_pause_timer():
-    """Pause the timer (can be resumed)"""
-    if game_state['timer_running']:
-        game_state['timer_running'] = False
-        print(f"Timer paused at {game_state['time_remaining']} seconds")
-        socketio.emit('timer_paused', get_serializable_state(), namespace='/')
-
-@socketio.on('resume_timer')
-def handle_resume_timer():
-    """Resume the timer from where it was paused"""
-    if not game_state['timer_running'] and game_state['time_remaining'] > 0:
-        game_state['timer_running'] = True
-        print(f"Timer resumed at {game_state['time_remaining']} seconds")
-        socketio.start_background_task(countdown_timer)
-        socketio.emit('timer_resumed', get_serializable_state(), namespace='/')
-
-@socketio.on('stop_timer')
-def handle_stop_timer():
-    """Emergency stop and complete reset"""
-    game_state['timer_running'] = False
-    game_state['time_remaining'] = 1800
-    game_state['reception_unlocked'] = False
-    game_state['transmission_shut_down'] = False
-    game_state['self_destruct_active'] = False
-    game_state['self_destruct_aborted'] = False
-    game_state['abort_buttons'] = {'reception': None, 'server_room': None}
-    print("Timer stopped and reset!")
-    socketio.emit('timer_stopped', get_serializable_state(), namespace='/')
-
-@socketio.on('reset_game')
-def handle_reset_game():
-    """Reset everything"""
-    game_state['timer_running'] = False
-    game_state['time_remaining'] = 1800
-    game_state['start_time'] = None
-    game_state['reception_unlocked'] = False
-    game_state['transmission_shut_down'] = False
-    game_state['self_destruct_active'] = False
-    game_state['self_destruct_aborted'] = False
-    game_state['abort_buttons'] = {'reception': None, 'server_room': None}
-    print("Game reset!")
-    socketio.emit('game_reset', get_serializable_state(), namespace='/')
-
-@socketio.on('check_transmission_code')
-def handle_transmission_code(data):
-    """Check if transmission code is correct"""
-    code = data.get('code', '')
-    
-    print(f"Code received: {code}")
-    
-    # Send verifying message first
-    emit('transmission_verifying', {'code': code})
-    
-    # Simulate verification delay (2 seconds)
-    eventlet.sleep(2)
-    
-    if code == TRANSMISSION_CODE:
-        game_state['transmission_shut_down'] = True
-        game_state['self_destruct_active'] = True
-        game_state['abort_buttons'] = {'reception': None, 'server_room': None}
+class ServerRoomStation(QWidget):
+    def __init__(self, server_url):
+        super().__init__()
+        self.signals = ServerSignals()
+        self.signals.transmission_verifying.connect(self.show_verifying)
+        self.signals.transmission_success.connect(self.show_self_destruct)
+        self.signals.transmission_failed.connect(self.show_failure)
+        self.signals.show_abort.connect(self.show_abort_button)
+        self.signals.abort_success.connect(self.show_success)
+        self.signals.abort_reset.connect(self.reset_abort_button)
+        self.signals.play_audio.connect(self.play_sound)
+        self.signals.game_reset.connect(self.reset_station)
+        self.signals.game_over.connect(self.show_game_over)
         
-        print("✓ Correct code! Self-destruct initiated!")
+        self.init_audio()
+        self.initUI()
+        self.setup_socketio(server_url)
+        self.start_random_sounds()
+    
+    def init_audio(self):
+        """Initialize pygame mixer for audio"""
+        pygame.mixer.init()
+        self.audio_path = 'audio/'
+        self.stop_sounds = Event()
         
-        # Emit to all clients
-        socketio.emit('transmission_shutdown', {
-            'success': True,
-            'self_destruct_active': True
-        }, namespace='/')
+        # Reserve channel 0 for random background sounds
+        # Music channel will be used for important sounds (start, lose, self-destruct)
+        self.random_sound_channel = pygame.mixer.Channel(0)
+    
+    def initUI(self):
+        self.setWindowTitle('Server Room Terminal')
+        self.setStyleSheet("background-color: black;")
+        self.showFullScreen()
         
-        # Trigger alarm audio (use alarm instead of non-existent file)
-        socketio.emit('play_audio', {'clip': 'alarm'}, namespace='/')
+        layout = QVBoxLayout()
+        layout.setAlignment(Qt.AlignCenter)
         
-    else:
-        print("✗ Invalid code")
-        emit('transmission_shutdown', {'success': False, 'message': 'INVALID CODE - ACCESS DENIED'})
-
-@socketio.on('abort_button_press')
-def handle_abort_button(data):
-    """Handle abort button press from either laptop"""
-    location = data.get('location')
-    current_time = datetime.now()
-    
-    if not game_state['self_destruct_active'] or game_state['self_destruct_aborted']:
-        return
-    
-    print(f"Abort button pressed at {location}")
-    
-    # Record this button press
-    game_state['abort_buttons'][location] = current_time
-    
-    # Check if both buttons have been pressed
-    reception_time = game_state['abort_buttons']['reception']
-    server_time = game_state['abort_buttons']['server_room']
-    
-    if reception_time and server_time:
-        # Calculate time difference
-        time_diff = abs((reception_time - server_time).total_seconds())
+        # Title
+        self.title_label = QLabel('SERVER CONTROL TERMINAL', self)
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setStyleSheet("color: #00ff00;")
+        title_font = QFont('Courier New', 50, QFont.Bold)
+        self.title_label.setFont(title_font)
+        layout.addWidget(self.title_label)
         
-        if time_diff <= ABORT_WINDOW_SECONDS:
-            # SUCCESS!
-            game_state['self_destruct_aborted'] = True
-            game_state['self_destruct_active'] = False
-            game_state['timer_running'] = False
-            game_state['reception_unlocked'] = True
-            
-            socketio.emit('self_destruct_aborted', {
-                'success': True,
-                'time_diff': round(time_diff, 2)
-            }, namespace='/')
-            
-            # Don't trigger non-existent audio file
-            # socketio.emit('play_audio', {'clip': 'self_destruct_aborted'}, namespace='/')
-            
-            print(f"✓ Self-destruct aborted! Time difference: {time_diff:.2f} seconds")
-        else:
-            # Too far apart - FULL RESET back to beginning
-            game_state['abort_buttons'] = {'reception': None, 'server_room': None}
-            game_state['self_destruct_active'] = False
-            game_state['transmission_shut_down'] = False
-            
-            socketio.emit('abort_failed_full_reset', {
-                'reason': 'not_simultaneous',
-                'time_diff': round(time_diff, 2)
-            }, namespace='/')
-            print(f"✗ Abort failed - buttons pressed {time_diff:.2f} seconds apart - FULL RESET")
-    else:
-        # First button pressed
-        socketio.emit('abort_button_pressed', {
-            'location': location,
-            'waiting_for': 'reception' if location == 'server_room' else 'server_room'
-        }, namespace='/')
-
-@socketio.on('trigger_audio')
-def handle_trigger_audio(data):
-    """DM can manually trigger audio clips"""
-    clip = data.get('clip')
-    print(f"Triggering audio: {clip}")
-    socketio.emit('play_audio', {'clip': clip}, namespace='/')
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    print(f'Client disconnected: {request.sid}')
+        # Instructions
+        self.instruction_label = QLabel('ENTER SHUTDOWN CODE:', self)
+        self.instruction_label.setAlignment(Qt.AlignCenter)
+        self.instruction_label.setStyleSheet("color: #00ff00;")
+        inst_font = QFont('Courier New', 30)
+        self.instruction_label.setFont(inst_font)
+        layout.addWidget(self.instruction_label)
+        
+        # Code input
+        self.code_input = QLineEdit(self)
+        self.code_input.setAlignment(Qt.AlignCenter)
+        self.code_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #003300;
+                color: #00ff00;
+                font-size: 50px;
+                padding: 20px;
+                border: 3px solid #00ff00;
+                font-family: 'Courier New';
+            }
+        """)
+        self.code_input.setMaxLength(20)
+        self.code_input.returnPressed.connect(self.submit_code)
+        layout.addWidget(self.code_input)
+        
+        # Submit button
+        self.submit_button = QPushButton('SUBMIT', self)
+        self.submit_button.setStyleSheet("""
+            QPushButton {
+                background-color: #003300;
+                color: #00ff00;
+                font-size: 40px;
+                font-weight: bold;
+                padding: 20px 50px;
+                border: 3px solid #00ff00;
+                border-radius: 10px;
+                font-family: 'Courier New';
+            }
+            QPushButton:hover {
+                background-color: #00ff00;
+                color: black;
+            }
+        """)
+        self.submit_button.clicked.connect(self.submit_code)
+        layout.addWidget(self.submit_button)
+        
+        # Status message
+        self.status_label = QLabel('', self)
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("color: #ffaa00;")
+        self.status_label.setWordWrap(True)
+        status_font = QFont('Courier New', 25)
+        self.status_label.setFont(status_font)
+        layout.addWidget(self.status_label)
+        
+        # Abort button (hidden initially)
+        self.abort_button = QPushButton('ABORT SELF-DESTRUCT', self)
+        self.abort_button.setStyleSheet("""
+            QPushButton {
+                background-color: #ff0000;
+                color: white;
+                font-size: 60px;
+                font-weight: bold;
+                padding: 50px;
+                border: 5px solid #fff;
+                border-radius: 20px;
+            }
+            QPushButton:hover {
+                background-color: #cc0000;
+            }
+            QPushButton:pressed {
+                background-color: #990000;
+            }
+        """)
+        self.abort_button.clicked.connect(self.press_abort_button)
+        self.abort_button.hide()
+        layout.addWidget(self.abort_button)
+        
+        self.setLayout(layout)
+    
+    def setup_socketio(self, server_url):
+        self.sio = socketio.Client(logger=False, engineio_logger=False)
+        
+        @self.sio.event
+        def connect():
+            print('Server room station connected')
+        
+        @self.sio.event
+        def disconnect():
+            print('Server room station disconnected')
+        
+        @self.sio.on('transmission_verifying')
+        def on_verifying(data):
+            self.signals.transmission_verifying.emit()
+        
+        @self.sio.on('transmission_shutdown')
+        def on_transmission_shutdown(data):
+            if data.get('success'):
+                self.signals.transmission_success.emit()
+                self.signals.show_abort.emit()
+            else:
+                message = data.get('message', 'INVALID CODE')
+                self.signals.transmission_failed.emit(message)
+        
+        @self.sio.on('self_destruct_aborted')
+        def on_aborted(data):
+            self.signals.abort_success.emit()
+        
+        @self.sio.on('game_reset')
+        def on_reset(data):
+            self.signals.game_reset.emit()
+        
+        @self.sio.on('timer_stopped')
+        def on_stopped(data):
+            self.signals.game_reset.emit()
+        
+        @self.sio.on('abort_failed_full_reset')
+        def on_abort_failed_full_reset(data):
+            self.signals.game_reset.emit()
+        
+        @self.sio.on('game_over')
+        def on_game_over(data):
+            self.signals.game_over.emit()
+        
+        @self.sio.on('play_audio')
+        def on_play_audio(data):
+            clip = data.get('clip')
+            self.signals.play_audio.emit(clip)
+        
+        try:
+            print(f"Connecting to {server_url}...")
+            self.sio.connect(server_url, namespaces=['/'])
+            print("Connected successfully!")
+        except Exception as e:
+            print(f"Connection error: {e}")
+            self.status_label.setText(f'CONNECTION FAILED\n{str(e)}')
+            self.status_label.setStyleSheet("color: #ff0000;")
+    
+    def submit_code(self):
+        code = self.code_input.text()
+        if not code:
+            return
+        
+        print(f"Submitting code: {code}")
+        self.sio.emit('check_transmission_code', {'code': code})
+        self.code_input.setEnabled(False)
+        self.submit_button.setEnabled(False)
+    
+    def show_verifying(self):
+        self.status_label.setText('VERIFYING CODE...')
+        self.status_label.setStyleSheet("color: #ffaa00;")
+    
+    def show_failure(self, message):
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet("color: #ff0000;")
+        self.code_input.clear()
+        
+        # Re-enable input after 3 seconds
+        QTimer.singleShot(3000, self.reset_input)
+    
+    def reset_input(self):
+        self.code_input.setEnabled(True)
+        self.submit_button.setEnabled(True)
+        self.status_label.setText('')
+        self.code_input.setFocus()
+    
+    def show_self_destruct(self):
+        self.title_label.setText('⚠️ TRANSMISSION SHUT DOWN ⚠️')
+        self.title_label.setStyleSheet("color: #ff0000;")
+        self.instruction_label.setText('SELF-DESTRUCT SEQUENCE INITIATED!')
+        self.instruction_label.setStyleSheet("color: #ff0000;")
+        self.code_input.hide()
+        self.submit_button.hide()
+        self.status_label.setText('')
+    
+    def show_abort_button(self):
+        self.status_label.setText('PRESS BUTTON TO ABORT\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS')
+        self.status_label.setStyleSheet("color: #ffaa00;")
+        self.abort_button.show()
+    
+    def press_abort_button(self):
+        print("Server room abort button pressed!")
+        self.sio.emit('abort_button_press', {'location': 'server_room'})
+        self.abort_button.setEnabled(False)
+        self.status_label.setText('BUTTON PRESSED!\nWAITING FOR RECEPTION...')
+    
+    def show_success(self):
+        self.title_label.setText('✓ MISSION COMPLETE ✓')
+        self.title_label.setStyleSheet("color: #00ff00;")
+        self.instruction_label.setText('SELF-DESTRUCT SEQUENCE ABORTED!')
+        self.instruction_label.setStyleSheet("color: #00ff00;")
+        self.status_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
+        self.status_label.setStyleSheet("color: #00ff00;")
+        self.abort_button.hide()
+        self.stop_sounds.set()
+    
+    def show_game_over(self):
+        self.title_label.setText('⏰ TIME EXPIRED ⏰')
+        self.title_label.setStyleSheet("color: #ff0000;")
+        self.instruction_label.setText('MISSION FAILED')
+        self.instruction_label.setStyleSheet("color: #ff0000;")
+        self.status_label.setText('PLEASE PRESS THE BUTTON ON THE WALL\nNEXT TO THE EXIT TO LEAVE THE ESCAPE ROOM')
+        self.status_label.setStyleSheet("color: #ffaa00;")
+        self.code_input.hide()
+        self.submit_button.hide()
+        self.abort_button.hide()
+        self.stop_sounds.set()
+    
+    def reset_abort_button(self):
+        self.abort_button.setEnabled(True)
+        self.status_label.setText('FAILED! TRY AGAIN\n(MUST BE WITHIN 10 SECONDS)')
+        self.status_label.setStyleSheet("color: #ff0000;")
+    
+    def reset_station(self):
+        self.title_label.setText('SERVER CONTROL TERMINAL')
+        self.title_label.setStyleSheet("color: #00ff00;")
+        self.instruction_label.setText('ENTER SHUTDOWN CODE:')
+        self.instruction_label.setStyleSheet("color: #00ff00;")
+        self.code_input.show()
+        self.code_input.setEnabled(True)
+        self.code_input.clear()
+        self.submit_button.show()
+        self.submit_button.setEnabled(True)
+        self.status_label.setText('')
+        self.abort_button.hide()
+        self.abort_button.setEnabled(True)
+        # Random sounds continue playing - don't touch stop_sounds
+    
+    def play_sound(self, clip_name):
+        """Play audio clip - important sounds use music channel"""
+        try:
+            audio_file = os.path.join(self.audio_path, f'{clip_name}.mp3')
+            if os.path.exists(audio_file):
+                # Important game sounds (start, lose, self-destruct) use music channel
+                if clip_name in ['start', 'lose', 'self_destruct_initiated', 'self_destruct_aborted']:
+                    # Stop any random sounds playing
+                    self.random_sound_channel.stop()
+                    # Play important sound on music channel
+                    pygame.mixer.music.load(audio_file)
+                    pygame.mixer.music.play()
+                    print(f"Playing important sound: {clip_name}")
+                else:
+                    # Random/manual sounds use sound effect channel (won't interrupt music)
+                    # Only play if music channel is not busy
+                    if not pygame.mixer.music.get_busy():
+                        sound = pygame.mixer.Sound(audio_file)
+                        self.random_sound_channel.play(sound)
+                        print(f"Playing background sound: {clip_name}")
+                    else:
+                        print(f"Skipping {clip_name} - important sound is playing")
+            else:
+                print(f"Audio file not found: {audio_file}")
+        except Exception as e:
+            print(f"Error playing audio: {e}")
+    
+    def start_random_sounds(self):
+        """Background thread for random creepy sounds"""
+        def random_sound_loop():
+            creepy_sounds = ['creepy1', 'creepy2', 'whisper', 'footsteps', 'door_creak']
+            while not self.stop_sounds.is_set():
+                # Wait random interval (30-120 seconds)
+                wait_time = random.randint(30, 120)
+                if self.stop_sounds.wait(wait_time):
+                    break
+                
+                # Only play random sound if no important sound is playing
+                if not pygame.mixer.music.get_busy():
+                    sound = random.choice(creepy_sounds)
+                    self.play_sound(sound)
+                else:
+                    print("Skipping random sound - important audio is playing")
+        
+        sound_thread = Thread(target=random_sound_loop, daemon=True)
+        sound_thread.start()
+    
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.close()
+    
+    def closeEvent(self, event):
+        self.stop_sounds.set()
+        if hasattr(self, 'sio') and self.sio.connected:
+            self.sio.disconnect()
+        pygame.mixer.quit()
+        event.accept()
 
 if __name__ == '__main__':
-    print("=" * 50)
-    print("ESCAPE ROOM SERVER STARTING")
-    print("=" * 50)
-    print(f"Transmission Shutdown Code: {TRANSMISSION_CODE}")
-    print(f"Abort Button Window: {ABORT_WINDOW_SECONDS} seconds")
-    print("=" * 50)
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    SERVER_URL = 'http://10.0.0.167:5000'  # DM Mac IP
+    
+    app = QApplication(sys.argv)
+    station = ServerRoomStation(SERVER_URL)
+    sys.exit(app.exec_())

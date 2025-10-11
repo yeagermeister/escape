@@ -12,7 +12,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 # Game state
 game_state = {
     'timer_running': False,
-    'time_remaining': 1800,
+    'time_remaining': 1800,  # 30 minutes in seconds
     'start_time': None,
     'reception_unlocked': False,
     'transmission_shut_down': False,
@@ -21,28 +21,6 @@ game_state = {
     'abort_buttons': {
         'reception': None,
         'server_room': None
-    }
-}
-
-# Terminal monitoring
-terminal_status = {
-    'timer_display': {
-        'connected': False,
-        'last_heartbeat': None,
-        'sid': None,
-        'errors': []
-    },
-    'reception': {
-        'connected': False,
-        'last_heartbeat': None,
-        'sid': None,
-        'errors': []
-    },
-    'server_room': {
-        'connected': False,
-        'last_heartbeat': None,
-        'sid': None,
-        'errors': []
     }
 }
 
@@ -61,33 +39,6 @@ def get_serializable_state():
         'self_destruct_aborted': game_state['self_destruct_aborted']
     }
 
-def get_terminal_status():
-    """Return serializable terminal status"""
-    status = {}
-    for terminal, info in terminal_status.items():
-        status[terminal] = {
-            'connected': info['connected'],
-            'last_heartbeat': info['last_heartbeat'].isoformat() if info['last_heartbeat'] else None,
-            'errors': info['errors'][-5:]  # Last 5 errors only
-        }
-    return status
-
-def check_terminal_health():
-    """Background task to check terminal health"""
-    while True:
-        eventlet.sleep(5)  # Check every 5 seconds
-        now = datetime.now()
-        
-        for terminal, info in terminal_status.items():
-            if info['connected'] and info['last_heartbeat']:
-                time_since_heartbeat = (now - info['last_heartbeat']).total_seconds()
-                if time_since_heartbeat > 15:  # No heartbeat for 15 seconds
-                    info['connected'] = False
-                    socketio.emit('terminal_disconnected', {
-                        'terminal': terminal,
-                        'reason': 'heartbeat_timeout'
-                    }, namespace='/')
-
 @app.route('/')
 def index():
     return render_template('dm_controller.html')
@@ -96,59 +47,6 @@ def index():
 def handle_connect():
     print(f'Client connected: {request.sid}')
     emit('game_state', get_serializable_state())
-    emit('terminal_status', get_terminal_status())
-
-@socketio.on('register_terminal')
-def handle_register_terminal(data):
-    """Terminal registers itself with the server"""
-    terminal_type = data.get('type')
-    if terminal_type in terminal_status:
-        terminal_status[terminal_type]['connected'] = True
-        terminal_status[terminal_type]['last_heartbeat'] = datetime.now()
-        terminal_status[terminal_type]['sid'] = request.sid
-        terminal_status[terminal_type]['errors'] = []
-        
-        print(f"Terminal registered: {terminal_type} (SID: {request.sid})")
-        
-        socketio.emit('terminal_connected', {
-            'terminal': terminal_type,
-            'timestamp': datetime.now().isoformat()
-        }, namespace='/')
-        
-        emit('registration_confirmed', {'type': terminal_type})
-
-@socketio.on('heartbeat')
-def handle_heartbeat(data):
-    """Receive heartbeat from terminals"""
-    terminal_type = data.get('type')
-    if terminal_type in terminal_status:
-        terminal_status[terminal_type]['last_heartbeat'] = datetime.now()
-        terminal_status[terminal_type]['connected'] = True
-
-@socketio.on('terminal_error')
-def handle_terminal_error(data):
-    """Receive error reports from terminals"""
-    terminal_type = data.get('type')
-    error_msg = data.get('error')
-    
-    if terminal_type in terminal_status:
-        terminal_status[terminal_type]['errors'].append({
-            'timestamp': datetime.now().isoformat(),
-            'message': error_msg
-        })
-        
-        print(f"ERROR from {terminal_type}: {error_msg}")
-        
-        socketio.emit('terminal_error_report', {
-            'terminal': terminal_type,
-            'error': error_msg,
-            'timestamp': datetime.now().isoformat()
-        }, namespace='/')
-
-@socketio.on('request_terminal_status')
-def handle_status_request():
-    """DM requests current terminal status"""
-    emit('terminal_status', get_terminal_status())
 
 @socketio.on('start_timer')
 def handle_start_timer():
@@ -164,7 +62,13 @@ def handle_start_timer():
     
     print("Timer started!")
     
+    # Play start audio
+    socketio.emit('play_audio', {'clip': 'start'}, namespace='/')
+    
+    # Start countdown loop
     socketio.start_background_task(countdown_timer)
+    
+    # Emit to all clients
     socketio.emit('timer_started', get_serializable_state(), namespace='/')
 
 def countdown_timer():
@@ -179,10 +83,15 @@ def countdown_timer():
     if game_state['time_remaining'] <= 0:
         game_state['timer_running'] = False
         game_state['reception_unlocked'] = True
+        
+        # Play lose audio
+        socketio.emit('play_audio', {'clip': 'lose'}, namespace='/')
+        
         socketio.emit('game_over', {'success': False}, namespace='/')
 
 @socketio.on('pause_timer')
 def handle_pause_timer():
+    """Pause the timer (can be resumed)"""
     if game_state['timer_running']:
         game_state['timer_running'] = False
         print(f"Timer paused at {game_state['time_remaining']} seconds")
@@ -190,6 +99,7 @@ def handle_pause_timer():
 
 @socketio.on('resume_timer')
 def handle_resume_timer():
+    """Resume the timer from where it was paused"""
     if not game_state['timer_running'] and game_state['time_remaining'] > 0:
         game_state['timer_running'] = True
         print(f"Timer resumed at {game_state['time_remaining']} seconds")
@@ -198,6 +108,7 @@ def handle_resume_timer():
 
 @socketio.on('stop_timer')
 def handle_stop_timer():
+    """Emergency stop and complete reset"""
     game_state['timer_running'] = False
     game_state['time_remaining'] = 1800
     game_state['reception_unlocked'] = False
@@ -210,6 +121,7 @@ def handle_stop_timer():
 
 @socketio.on('reset_game')
 def handle_reset_game():
+    """Reset everything"""
     game_state['timer_running'] = False
     game_state['time_remaining'] = 1800
     game_state['start_time'] = None
@@ -223,10 +135,15 @@ def handle_reset_game():
 
 @socketio.on('check_transmission_code')
 def handle_transmission_code(data):
+    """Check if transmission code is correct"""
     code = data.get('code', '')
+    
     print(f"Code received: {code}")
     
+    # Send verifying message first
     emit('transmission_verifying', {'code': code})
+    
+    # Simulate verification delay (2 seconds)
     eventlet.sleep(2)
     
     if code == TRANSMISSION_CODE:
@@ -236,18 +153,22 @@ def handle_transmission_code(data):
         
         print("✓ Correct code! Self-destruct initiated!")
         
+        # Emit to all clients
         socketio.emit('transmission_shutdown', {
             'success': True,
             'self_destruct_active': True
         }, namespace='/')
         
+        # Trigger audio
         socketio.emit('play_audio', {'clip': 'self_destruct_initiated'}, namespace='/')
+        
     else:
         print("✗ Invalid code")
         emit('transmission_shutdown', {'success': False, 'message': 'INVALID CODE - ACCESS DENIED'})
 
 @socketio.on('abort_button_press')
 def handle_abort_button(data):
+    """Handle abort button press from either laptop"""
     location = data.get('location')
     current_time = datetime.now()
     
@@ -256,15 +177,19 @@ def handle_abort_button(data):
     
     print(f"Abort button pressed at {location}")
     
+    # Record this button press
     game_state['abort_buttons'][location] = current_time
     
+    # Check if both buttons have been pressed
     reception_time = game_state['abort_buttons']['reception']
     server_time = game_state['abort_buttons']['server_room']
     
     if reception_time and server_time:
+        # Calculate time difference
         time_diff = abs((reception_time - server_time).total_seconds())
         
         if time_diff <= ABORT_WINDOW_SECONDS:
+            # SUCCESS!
             game_state['self_destruct_aborted'] = True
             game_state['self_destruct_active'] = False
             game_state['timer_running'] = False
@@ -279,6 +204,7 @@ def handle_abort_button(data):
             
             print(f"✓ Self-destruct aborted! Time difference: {time_diff:.2f} seconds")
         else:
+            # Too far apart - FULL RESET back to beginning
             game_state['abort_buttons'] = {'reception': None, 'server_room': None}
             game_state['self_destruct_active'] = False
             game_state['transmission_shut_down'] = False
@@ -289,6 +215,7 @@ def handle_abort_button(data):
             }, namespace='/')
             print(f"✗ Abort failed - buttons pressed {time_diff:.2f} seconds apart - FULL RESET")
     else:
+        # First button pressed
         socketio.emit('abort_button_pressed', {
             'location': location,
             'waiting_for': 'reception' if location == 'server_room' else 'server_room'
@@ -296,23 +223,13 @@ def handle_abort_button(data):
 
 @socketio.on('trigger_audio')
 def handle_trigger_audio(data):
+    """DM can manually trigger audio clips"""
     clip = data.get('clip')
     socketio.emit('play_audio', {'clip': clip}, namespace='/')
 
 @socketio.on('disconnect')
 def handle_disconnect():
     print(f'Client disconnected: {request.sid}')
-    
-    # Check if this was a terminal
-    for terminal, info in terminal_status.items():
-        if info['sid'] == request.sid:
-            info['connected'] = False
-            socketio.emit('terminal_disconnected', {
-                'terminal': terminal,
-                'reason': 'client_disconnect'
-            }, namespace='/')
-            print(f"Terminal disconnected: {terminal}")
-            break
 
 if __name__ == '__main__':
     print("=" * 50)
@@ -321,8 +238,4 @@ if __name__ == '__main__':
     print(f"Transmission Shutdown Code: {TRANSMISSION_CODE}")
     print(f"Abort Button Window: {ABORT_WINDOW_SECONDS} seconds")
     print("=" * 50)
-    
-    # Start health check background task
-    socketio.start_background_task(check_terminal_health)
-    
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
