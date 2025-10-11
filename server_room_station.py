@@ -338,7 +338,7 @@ class ServerRoomStation(QWidget):
         self.title_label.setStyleSheet("color: #00ff00;")
         self.instruction_label.setText('SELF-DESTRUCT SEQUENCE ABORTED!')
         self.instruction_label.setStyleSheet("color: #00ff00;")
-        self.status_label.setText('YOU HAVE SAVED THE FACILITY!')
+        self.status_label.setText('YOU HAVE BEATEN THE ESCAPE ROOM!  PLease press the exit button next to the door to leave')
         self.status_label.setStyleSheet("color: #00ff00;")
         self.abort_button.hide()
         self.stop_sounds.set()
