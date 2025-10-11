@@ -1,13 +1,13 @@
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
-import eventlet
 from datetime import datetime, timedelta
+import time
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'escape_room_secret_2024'
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Game state
 game_state = {
@@ -62,9 +62,6 @@ def handle_start_timer():
     
     print("Timer started!")
     
-    # Play start audio
-    socketio.emit('play_audio', {'clip': 'start'}, namespace='/')
-    
     # Start countdown loop
     socketio.start_background_task(countdown_timer)
     
@@ -74,7 +71,7 @@ def handle_start_timer():
 def countdown_timer():
     """Background task to update timer every second"""
     while game_state['timer_running'] and game_state['time_remaining'] > 0:
-        eventlet.sleep(1)
+        time.sleep(1)
         game_state['time_remaining'] -= 1
         socketio.emit('timer_update', {
             'time_remaining': game_state['time_remaining']
@@ -83,10 +80,6 @@ def countdown_timer():
     if game_state['time_remaining'] <= 0:
         game_state['timer_running'] = False
         game_state['reception_unlocked'] = True
-        
-        # Play lose audio
-        socketio.emit('play_audio', {'clip': 'lose'}, namespace='/')
-        
         socketio.emit('game_over', {'success': False}, namespace='/')
 
 @socketio.on('pause_timer')
@@ -144,7 +137,7 @@ def handle_transmission_code(data):
     emit('transmission_verifying', {'code': code})
     
     # Simulate verification delay (2 seconds)
-    eventlet.sleep(2)
+    time.sleep(2)
     
     if code == TRANSMISSION_CODE:
         game_state['transmission_shut_down'] = True
@@ -160,7 +153,7 @@ def handle_transmission_code(data):
         }, namespace='/')
         
         # Trigger audio
-        socketio.emit('play_audio', {'clip': 'self_destruct_initiated'}, namespace='/')
+        socketio.emit('play_audio', {'clip': 'alarm'}, namespace='/')
         
     else:
         print("✗ Invalid code")
@@ -199,8 +192,6 @@ def handle_abort_button(data):
                 'success': True,
                 'time_diff': round(time_diff, 2)
             }, namespace='/')
-            
-            socketio.emit('play_audio', {'clip': 'self_destruct_aborted'}, namespace='/')
             
             print(f"✓ Self-destruct aborted! Time difference: {time_diff:.2f} seconds")
         else:
