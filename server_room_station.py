@@ -17,6 +17,7 @@ class ServerSignals(QObject):
     abort_reset = pyqtSignal()
     play_audio = pyqtSignal(str)
     game_reset = pyqtSignal()
+    reset_input_signal = pyqtSignal()
 
 class ServerRoomStation(QWidget):
     def __init__(self, server_url):
@@ -30,9 +31,16 @@ class ServerRoomStation(QWidget):
         self.signals.abort_reset.connect(self.reset_abort_button)
         self.signals.play_audio.connect(self.play_sound)
         self.signals.game_reset.connect(self.reset_station)
+        self.signals.reset_input_signal.connect(self.reset_input)
         
         self.init_audio()
         self.initUI()
+        
+        # Create timer in the main thread
+        self.reset_timer = QTimer(self)
+        self.reset_timer.setSingleShot(True)
+        self.reset_timer.timeout.connect(self.reset_input)
+        
         self.setup_socketio(server_url)
         self.start_random_sounds()
     
@@ -140,20 +148,10 @@ class ServerRoomStation(QWidget):
     
     def setup_socketio(self, server_url):
         self.sio = socketio.Client()
-        self.heartbeat_timer = QTimer()
-        self.heartbeat_timer.timeout.connect(self.send_heartbeat)
         
         @self.sio.on('connect')
         def on_connect():
             print('Server room station connected')
-            # Register this terminal
-            self.sio.emit('register_terminal', {'type': 'server_room'})
-            # Start sending heartbeats
-            self.heartbeat_timer.start(5000)  # Every 5 seconds
-        
-        @self.sio.on('registration_confirmed')
-        def on_registration(data):
-            print(f"Registration confirmed: {data['type']}")
         
         @self.sio.on('transmission_verifying')
         def on_verifying(data):
@@ -193,25 +191,6 @@ class ServerRoomStation(QWidget):
             self.sio.connect(server_url)
         except Exception as e:
             print(f"Connection error: {e}")
-            self.report_error(f"Connection failed: {e}")
-    
-    def send_heartbeat(self):
-        """Send heartbeat to server"""
-        try:
-            self.sio.emit('heartbeat', {'type': 'server_room'})
-        except Exception as e:
-            print(f"Heartbeat error: {e}")
-    
-    def report_error(self, error_msg):
-        """Report error to DM"""
-        try:
-            self.sio.emit('terminal_error', {
-                'type': 'server_room',
-                'error': error_msg
-            })
-            print(f"Error reported to DM: {error_msg}")
-        except Exception as e:
-            print(f"Could not report error: {e}")
     
     def submit_code(self):
         code = self.code_input.text()
@@ -219,17 +198,9 @@ class ServerRoomStation(QWidget):
             return
         
         print(f"Submitting code: {code}")
-        try:
-            self.sio.emit('check_transmission_code', {'code': code})
-            self.code_input.setEnabled(False)
-            self.submit_button.setEnabled(False)
-        except Exception as e:
-            error_msg = f"Submit code error: {e}"
-            print(error_msg)
-            self.report_error(error_msg)
-            self.status_label.setText(f'ERROR: {str(e)}')
-            self.code_input.setEnabled(True)
-            self.submit_button.setEnabled(True)
+        self.sio.emit('check_transmission_code', {'code': code})
+        self.code_input.setEnabled(False)
+        self.submit_button.setEnabled(False)
     
     def show_verifying(self):
         self.status_label.setText('VERIFYING CODE...')
@@ -240,8 +211,8 @@ class ServerRoomStation(QWidget):
         self.status_label.setStyleSheet("color: #ff0000;")
         self.code_input.clear()
         
-        # Re-enable input after 3 seconds
-        QTimer.singleShot(3000, self.reset_input)
+        # Re-enable input after 3 seconds - use the timer created in __init__
+        self.reset_timer.start(3000)
     
     def reset_input(self):
         self.code_input.setEnabled(True)
@@ -265,16 +236,9 @@ class ServerRoomStation(QWidget):
     
     def press_abort_button(self):
         print("Server room abort button pressed!")
-        try:
-            self.sio.emit('abort_button_press', {'location': 'server_room'})
-            self.abort_button.setEnabled(False)
-            self.status_label.setText('BUTTON PRESSED!\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
-        except Exception as e:
-            error_msg = f"Abort button error: {e}"
-            print(error_msg)
-            self.report_error(error_msg)
-            self.status_label.setText(f'ERROR: {str(e)}')
-            self.abort_button.setEnabled(True)
+        self.sio.emit('abort_button_press', {'location': 'server_room'})
+        self.abort_button.setEnabled(False)
+        self.status_label.setText('BUTTON PRESSED!\nI GET BY WITH A LITTLE HELP FROM MY FRIENDS...')
     
     def show_success(self):
         self.title_label.setText('✓ MISSION COMPLETE ✓')
@@ -316,9 +280,7 @@ class ServerRoomStation(QWidget):
             else:
                 print(f"Audio file not found: {audio_file}")
         except Exception as e:
-            error_msg = f"Audio playback error: {e}"
-            print(error_msg)
-            self.report_error(error_msg)
+            print(f"Error playing audio: {e}")
     
     def start_random_sounds(self):
         """Background thread for random creepy sounds"""
@@ -343,7 +305,6 @@ class ServerRoomStation(QWidget):
     
     def closeEvent(self, event):
         self.stop_sounds.set()
-        self.heartbeat_timer.stop()
         if hasattr(self, 'sio'):
             self.sio.disconnect()
         pygame.mixer.quit()
