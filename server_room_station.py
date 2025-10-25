@@ -168,7 +168,9 @@ class ServerRoomStation(QWidget):
         self.setLayout(layout)
     
     def setup_socketio(self, server_url):
-        self.sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1, reconnection_delay_max=5)
+        self.sio = socketio.Client(logger=False, engineio_logger=False,
+            reconnection=True, reconnection_attempts=0,
+            reconnection_delay=1, reconnection_delay_max=5)
         
         @self.sio.on('connect')
         def on_connect():

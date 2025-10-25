@@ -7,7 +7,8 @@ import time
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'escape_room_secret_2024'
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', 
+    ping_timeout=60, ping_interval=25)
 
 # Game state
 game_state = {
